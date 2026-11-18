@@ -1,6 +1,7 @@
 import type { H3Event } from 'h3'
 import { inlineScriptHashes, withScriptSources } from '../../shared/security-headers'
 import { WIDGET_LIMITS, widgetFrameCsp } from '../../shared/customer-widgets'
+import { DEFAULT_SERVER_THEME, textOn, THEME_FONT_STACKS, type ServerTheme } from '../../shared/server-theme'
 import { cf } from './cf'
 import { clientIp, requireRateLimit } from './rate-limit'
 import type { PublicWidget, WidgetVisitor } from './widget-visitors'
@@ -16,13 +17,32 @@ import type { PublicWidget, WidgetVisitor } from './widget-visitors'
  * A `CustomerWidget` Durable Object holding Visitor sockets is the later design.
  */
 
+/**
+ * The Widget's look: the Client's own neutral surfaces, with the Server's Appearance accent (and font) when it has one,
+ * so a Widget looks like the Server that answers it. Light and dark follow the visitor's system.
+ */
+export type WidgetLook = { light: { primary: string; onPrimary: string }; dark: { primary: string; onPrimary: string }; font: string }
+
+const HOUSE_FONT = '"Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+
+export function widgetLook(theme: ServerTheme = DEFAULT_SERVER_THEME): WidgetLook {
+  const light = theme.accent ?? '#171717'
+  const dark = theme.accentDark ?? theme.accent ?? '#ededed'
+  return {
+    light: { primary: light, onPrimary: theme.accent ? textOn(light) : '#fafafa' },
+    dark: { primary: dark, onPrimary: theme.accentDark ?? theme.accent ? textOn(dark) : '#0a0a0a' },
+    font: theme.font === 'default' ? HOUSE_FONT : THEME_FONT_STACKS[theme.font],
+  }
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[char]!)
 }
 
 /** The loader. It knows only its Server, its Widget and the sites that may show it. */
-export function widgetLoaderScript(input: { serverOrigin: string; publicId: string; sites: string[] }): string {
-  const config = JSON.stringify({ origin: input.serverOrigin, id: input.publicId, sites: input.sites }).replace(/</gu, '\\u003c')
+export function widgetLoaderScript(input: { serverOrigin: string; publicId: string; sites: string[]; look?: WidgetLook }): string {
+  const look = input.look ?? widgetLook()
+  const config = JSON.stringify({ origin: input.serverOrigin, id: input.publicId, sites: input.sites, look }).replace(/</gu, '\\u003c')
   return `(() => {
   const c = ${config}
   const w = window.__zugoidWidgets = window.__zugoidWidgets || {}
@@ -39,16 +59,22 @@ export function widgetLoaderScript(input: { serverOrigin: string; publicId: stri
     const host = document.createElement('div')
     host.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:2147483000;'
     const root = host.attachShadow({ mode: 'closed' })
+    // Colours come from the Server's look (widgetLook); only #rrggbb and font stacks reach this style.
+    const css = (mode) => 'button{background:' + c.look[mode].primary + ';color:' + c.look[mode].onPrimary + '}'
     root.innerHTML = '<style>'
       + ':host{all:initial}'
-      + 'button{width:56px;height:56px;border-radius:50%;border:0;cursor:pointer;background:#4f46e5;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);display:grid;place-items:center;padding:0}'
-      + 'button:focus-visible{outline:3px solid #a5b4fc;outline-offset:2px}'
-      + 'svg{width:26px;height:26px;fill:currentColor}'
-      + '.badge{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;border-radius:10px;background:#dc2626;color:#fff;font:600 12px/20px system-ui,sans-serif;text-align:center;padding:0 5px;box-sizing:border-box}'
-      + 'iframe{position:absolute;right:0;bottom:72px;width:min(380px,calc(100vw - 40px));height:min(600px,calc(100vh - 112px));border:0;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.3);background:transparent;color-scheme:normal}'
+      + 'button{width:48px;height:48px;border-radius:12px;border:1px solid rgba(0,0,0,.08);cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.16);display:grid;place-items:center;padding:0;transition:transform .15s ease}'
+      + 'button:hover{transform:translateY(-1px)}'
+      + 'button:focus-visible{outline:2px solid currentColor;outline-offset:2px}'
+      + css('light')
+      + 'svg{width:22px;height:22px}'
+      + '.badge{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;border-radius:9px;background:#b91c1c;color:#fff;font:600 11px/18px ' + c.look.font + ';text-align:center;padding:0 5px;box-sizing:border-box}'
+      + 'iframe{position:absolute;right:0;bottom:60px;width:min(380px,calc(100vw - 40px));height:min(600px,calc(100vh - 100px));border:1px solid #e5e5e5;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.18);background:#fff;color-scheme:normal}'
+      + '@media (prefers-color-scheme: dark){' + css('dark') + 'button{border-color:rgba(255,255,255,.12)}iframe{border-color:#262626;background:#000;box-shadow:0 16px 48px rgba(0,0,0,.6)}}'
+      + '@media (prefers-reduced-motion: reduce){button{transition:none}button:hover{transform:none}}'
       + '[hidden]{display:none}'
       + '</style>'
-      + '<button type="button" aria-label="Open chat" aria-expanded="false"><svg viewBox="0 0 256 256" aria-hidden="true"><path d="M128 24a104 104 0 0 0-91.2 154l-11.3 39.6a12 12 0 0 0 14.9 14.9L80 221.2A104 104 0 1 0 128 24Z"/></svg></button>'
+      + '<button type="button" aria-label="Open chat" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/></svg></button>'
       + '<span class="badge" hidden></span>'
     const button = root.querySelector('button')
     const badge = root.querySelector('.badge')
@@ -198,38 +224,46 @@ const FRAME_SCRIPT = `(() => {
   void poll()
 })()`
 
-const FRAME_STYLE = `
-  :root { color-scheme: light dark; --bg: #ffffff; --panel: #f4f4f5; --line: #e4e4e7; --text: #18181b; --muted: #71717a; --accent: #4f46e5; --accent-text: #ffffff; --mine: #4f46e5; --mine-text: #ffffff; --theirs: #f4f4f5; --error: #dc2626; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #18181b; --panel: #27272a; --line: #3f3f46; --text: #fafafa; --muted: #a1a1aa; --theirs: #27272a; --error: #f87171; } }
+/** The frame's style: the Client's surfaces, radius and type (packages/client-ui/theme.css), and the Server's look. */
+function frameStyle(look: WidgetLook): string {
+  return `
+  @font-face { font-family: "Geist"; src: url("/fonts/geist-variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+  :root { color-scheme: light dark; --bg: #ffffff; --soft: #f5f5f5; --line: #e5e5e5; --text: #171717; --strong: #000000; --muted: #707070; --primary: ${look.light.primary}; --on-primary: ${look.light.onPrimary}; --error: #b91c1c; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #000000; --soft: #171717; --line: #262626; --text: #e5e5e5; --strong: #fafafa; --muted: #8a8a8a; --primary: ${look.dark.primary}; --on-primary: ${look.dark.onPrimary}; --error: #f87171; } }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
-  body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; background: var(--accent); color: var(--accent-text); }
-  header h1 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  header button { border: 0; background: transparent; color: inherit; font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
-  header button:focus-visible { outline: 2px solid var(--accent-text); }
-  #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
-  .greeting { margin: 0 0 4px; padding: 10px 12px; border-radius: 12px; background: var(--theirs); white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg.inbound { align-self: flex-end; background: var(--mine); color: var(--mine-text); border-bottom-right-radius: 4px; }
-  .msg.outbound { align-self: flex-start; background: var(--theirs); border-bottom-left-radius: 4px; }
-  .who { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
-  form { border-top: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
-  #intro { display: flex; gap: 6px; }
+  body { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font: 14px/1.5 ${look.font}; -webkit-font-smoothing: antialiased; }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header button { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+  header button:hover { background: var(--soft); color: var(--text); }
+  header button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  header svg { width: 16px; height: 16px; }
+  #log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .greeting { margin: 0 0 4px; padding: 8px 12px; border-radius: 6px; background: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 85%; }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.inbound { align-self: flex-end; background: var(--primary); color: var(--on-primary); }
+  .msg.outbound { align-self: flex-start; background: var(--soft); }
+  .who { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 2px; }
+  form { border-top: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #intro { display: flex; gap: 8px; }
   #intro[hidden] { display: none; }
-  input, textarea { width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
-  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  .row { display: flex; gap: 6px; align-items: flex-end; }
-  textarea { resize: none; min-height: 40px; max-height: 120px; }
-  #send { flex: none; border: 0; border-radius: 10px; padding: 0 14px; height: 40px; background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; }
-  #send:disabled { opacity: .6; cursor: default; }
+  input, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+  input::placeholder, textarea::placeholder { color: var(--muted); }
+  input:focus, textarea:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+  .row { display: flex; gap: 8px; align-items: flex-end; }
+  textarea { resize: none; min-height: 38px; max-height: 120px; }
+  #send { flex: none; border: 0; border-radius: 6px; padding: 0 14px; height: 38px; background: var(--primary); color: var(--on-primary); font: inherit; font-weight: 500; cursor: pointer; }
+  #send:hover { opacity: .9; }
+  #send:disabled { opacity: .5; cursor: default; }
   #status { min-height: 0; margin: 0; font-size: 12px; color: var(--error); }
   #status:empty { display: none; }
-  .note { margin: 0; font-size: 11px; color: var(--muted); }
+  .note { margin: 0; font-size: 12px; color: var(--muted); }
 `
+}
 
 /** The frame page for one Widget. The name and greeting are the only Widget text in it, escaped. */
-export function widgetFrameHtml(widget: Pick<PublicWidget, 'publicId' | 'name' | 'greeting'>): string {
+export function widgetFrameHtml(widget: Pick<PublicWidget, 'publicId' | 'name' | 'greeting'>, look: WidgetLook = widgetLook()): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -237,10 +271,10 @@ export function widgetFrameHtml(widget: Pick<PublicWidget, 'publicId' | 'name' |
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <title>${escapeHtml(widget.name)}</title>
-<style>${FRAME_STYLE}</style>
+<style>${frameStyle(look)}</style>
 </head>
 <body data-widget="${escapeHtml(widget.publicId)}">
-<header><h1>${escapeHtml(widget.name)}</h1><button id="close" type="button" aria-label="Close chat">&times;</button></header>
+<header><h1>${escapeHtml(widget.name)}</h1><button id="close" type="button" aria-label="Close chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></header>
 <main id="log" aria-live="polite">${widget.greeting.trim() ? `<p class="greeting">${escapeHtml(widget.greeting)}</p>` : ''}</main>
 <form id="form" autocomplete="on">
 <div id="intro"><input id="name" name="name" maxlength="${WIDGET_LIMITS.claimedName}" placeholder="Name (optional)" autocomplete="name"><input id="email" name="email" type="email" maxlength="254" placeholder="Email (optional)" autocomplete="email"></div>
@@ -255,8 +289,8 @@ export function widgetFrameHtml(widget: Pick<PublicWidget, 'publicId' | 'name' |
 }
 
 /** Serves the frame with its own policy: only the Widget's sites may frame it. */
-export async function sendWidgetFrame(event: H3Event, widget: PublicWidget): Promise<string> {
-  const html = widgetFrameHtml(widget)
+export async function sendWidgetFrame(event: H3Event, widget: PublicWidget, look: WidgetLook = widgetLook()): Promise<string> {
+  const html = widgetFrameHtml(widget, look)
   setHeader(event, 'Content-Type', 'text/html; charset=utf-8')
   setHeader(event, 'Cache-Control', 'no-store')
   setHeader(event, 'Referrer-Policy', 'no-referrer')

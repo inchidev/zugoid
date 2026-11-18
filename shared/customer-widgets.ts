@@ -58,6 +58,7 @@ export function widgetFrameCsp(sites: readonly string[]): string {
     "script-src 'self'",
     "style-src 'unsafe-inline'",
     "img-src 'self' data:",
+    "font-src 'self'",
     "connect-src 'self'",
     `frame-ancestors ${sites.length ? sites.join(' ') : "'none'"}`,
     "base-uri 'none'",

@@ -1,6 +1,7 @@
 import { cf, fail } from '../../utils/cf'
 import { requestServerOrigin } from '../../utils/server-origins'
-import { widgetLoaderScript } from '../../utils/widget-pages'
+import { readServerTheme } from '../../utils/server-theme'
+import { widgetLoaderScript, widgetLook } from '../../utils/widget-pages'
 import { findPublicWidget } from '../../utils/widget-visitors'
 
 /** `/widget/<public id>.js`: the loader a website adds with the embed code. Cached briefly. */
@@ -13,5 +14,5 @@ export default defineEventHandler(async (event) => {
   setHeader(event, 'Content-Type', 'text/javascript; charset=utf-8')
   setHeader(event, 'Cache-Control', 'public, max-age=300')
   setHeader(event, 'Cross-Origin-Resource-Policy', 'cross-origin')
-  return widgetLoaderScript({ serverOrigin, publicId: widget.publicId, sites: widget.sites })
+  return widgetLoaderScript({ serverOrigin, publicId: widget.publicId, sites: widget.sites, look: widgetLook(await readServerTheme(env.DB)) })
 })
