@@ -220,3 +220,23 @@ describe('the website side', () => {
     expect(script).not.toContain('</script>')
   })
 })
+
+describe('the Widget look', () => {
+  it('uses the Client\'s neutral house look by default, and the Server\'s Appearance accent and font when set', async () => {
+    const { widgetLook } = await import('../../server/utils/widget-pages')
+    const { parseServerTheme } = await import('../../shared/server-theme')
+    expect(widgetLook()).toMatchObject({ light: { primary: '#171717', onPrimary: '#fafafa' }, dark: { primary: '#ededed', onPrimary: '#0a0a0a' } })
+    expect(widgetLook().font).toContain('Geist')
+    const themed = widgetLook(parseServerTheme(JSON.stringify({ accent: '#f59e0b', font: 'mono' })))
+    expect(themed).toMatchObject({ light: { primary: '#f59e0b', onPrimary: '#000000' }, dark: { primary: '#f59e0b', onPrimary: '#000000' } })
+    expect(themed.font).toContain('monospace')
+  })
+
+  it('puts the look into the loader and the frame, and lets the frame load the Server\'s font', async () => {
+    const { widgetFrameHtml, widgetLoaderScript, widgetLook } = await import('../../server/utils/widget-pages')
+    const look = widgetLook()
+    expect(widgetFrameHtml({ publicId: 'abcdefghijklmnop', name: 'Zugoid', greeting: '' }, look)).toContain('--primary: #171717')
+    expect(widgetLoaderScript({ serverOrigin: 'https://chat.example.net', publicId: 'abcdefghijklmnop', sites: ['https://example.com'], look })).toContain('"primary":"#171717"')
+    expect(widgetFrameCsp(['https://example.com'])).toContain("font-src 'self'")
+  })
+})
