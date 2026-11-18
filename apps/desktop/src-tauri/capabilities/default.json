@@ -1,0 +1,32 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The bundled Server list: discovery documents and window dragging only",
+  "windows": ["main"],
+  "local": true,
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "allow-allow-server",
+    "allow-rail-open",
+    "allow-rail-list",
+    "allow-rail-active",
+    "allow-sync-servers",
+    "allow-pending-page",
+    "allow-pending-share",
+    "allow-shared-file-bytes",
+    "allow-cancel-share",
+    "allow-recording-limits",
+    "allow-transcribe",
+    "allow-send-marked",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*/.well-known/zugoid" },
+        { "url": "https://*:*/.well-known/zugoid" },
+        { "url": "http://localhost:*/.well-known/zugoid" },
+        { "url": "http://127.0.0.1:*/.well-known/zugoid" }
+      ]
+    }
+  ]
+}

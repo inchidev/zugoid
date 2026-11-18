@@ -1,0 +1,21 @@
+import { cf, fail } from '../../../utils/cf'
+import { requireChannelAccess } from '../../../utils/guards'
+import { findAgentRun } from '../../../utils/agent-run-service'
+import { factoryAuthority, taskBox } from '../../../utils/factory-authority'
+import { factoryRepositoryName, isCloudflareNode } from '../../../../shared/software-factory'
+
+/** Explicit human export. A short-lived read token is never an Agent tool result. */
+export default defineEventHandler(async event => {
+  setHeader(event, 'Cache-Control', 'private, no-store')
+  const { env } = cf(event), run = await findAgentRun(env, getRouterParam(event, 'id')!)
+  if (!run) fail(404, 'not_found', 'Run not found')
+  const actor = await requireChannelAccess(event, run.channelId)
+  const context = await factoryAuthority(env, run.id, actor.user.id, false, true)
+  if (!isCloudflareNode(context.capabilities) || !env.FACTORY_CODE) fail(409, 'factory_export_local', 'Use zugoid factory backup on the trusted VPS host to export local source and receipts')
+  const box = await taskBox(env, context)
+  if (!box) fail(404, 'not_found', 'This Task has no box yet')
+  const name = factoryRepositoryName(context.auth.serverId, box.id)
+  using repository = await env.FACTORY_CODE.get(name)
+  const info = await repository.info(), token = await repository.createToken('read', 300)
+  return { remote: info.remote, token: token.plaintext, expiresAt: token.expiresAt, instruction: 'Private read access for this Task repository only. Clone with an Authorization Bearer Git extraHeader. The zugoid-state branch contains private working/index checkpoints; its first parent is the exact upstream-publication HEAD. Keep this token private.' }
+})

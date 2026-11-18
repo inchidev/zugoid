@@ -1,0 +1,84 @@
+# Builds Zugoid and runs it on one celld node.
+# The build stage is the only place Node runs. celld executes the Worker.
+
+ARG NODE_VERSION=24.21.0
+ARG CELLD_VERSION=0.6.3
+
+# The build output is JavaScript and static assets, so one native build serves
+# every runtime architecture.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS build
+
+ENV NODE_OPTIONS=--max-old-space-size=6144 \
+    CI=true \
+    NUXT_TELEMETRY_DISABLED=1 \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+
+COPY . .
+
+# `pnpm build` pins NODE_OPTIONS to 4096. Call nuxt with the stage env so this
+# image build keeps the 6144 MiB heap.
+RUN pnpm install --frozen-lockfile \
+    && pnpm build \
+    && node -p "require('./package.json').version" > /src/.zugoid-version
+
+FROM ghcr.io/denoland/celld:${CELLD_VERSION} AS celld
+
+FROM node:${NODE_VERSION}-bookworm-slim AS tools
+RUN npm install --prefix /tools --no-audit --no-fund esbuild@0.25.9
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl jq tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 zugoid \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin zugoid \
+    && mkdir -p /opt/zugoid /var/lib/zugoid/celld \
+    && chown 10001:10001 /var/lib/zugoid/celld
+
+COPY --from=celld /usr/local/bin/celld /usr/local/bin/celld
+COPY --from=tools /tools/node_modules/@esbuild /tmp/esbuild
+RUN cp /tmp/esbuild/*/bin/esbuild /usr/local/bin/esbuild && rm -rf /tmp/esbuild
+COPY self-host/entrypoint.sh /usr/local/bin/zugoid-entrypoint
+COPY self-host/healthcheck.sh /usr/local/bin/zugoid-healthcheck
+COPY self-host/dev-reload.sh /usr/local/bin/zugoid-dev-reload
+
+RUN chmod 755 /usr/local/bin/zugoid-entrypoint /usr/local/bin/zugoid-healthcheck /usr/local/bin/esbuild /usr/local/bin/celld
+
+WORKDIR /opt/zugoid
+
+ENV CELLD_WATCH=/var/lib/zugoid/celld \
+    CELLD_ESBUILD=/usr/local/bin/esbuild
+
+# Stays root so an older Compose file, which sets no user, can still prepare its root-owned volume.
+# The entrypoint gives up root before starting anything.
+EXPOSE 8080
+
+LABEL org.opencontainers.image.title="zugoid" \
+      org.opencontainers.image.source="https://github.com/inchidev/zugoid" \
+      org.opencontainers.image.licenses="BUSL-1.1" \
+      org.opencontainers.image.description="Zugoid on celld with a RustFS fleet bucket"
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=240s --retries=12 \
+    CMD /usr/local/bin/zugoid-healthcheck
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/zugoid-entrypoint"]
+
+# Source and compiler output are mounted by compose.dev.yml. No Node/Vite or
+# application build is required in the runtime container.
+FROM runtime AS development
+
+FROM runtime AS application
+COPY --from=build /src/.output /opt/zugoid/.output
+COPY --from=build /src/drizzle/server-migrations /opt/zugoid/drizzle/server-migrations
+COPY --from=build /src/wrangler.celld.json /opt/zugoid/wrangler.celld.json
+COPY --from=build /src/.zugoid-version /opt/zugoid/VERSION
+COPY --from=build /src/LICENSE /opt/zugoid/LICENSE

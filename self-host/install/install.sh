@@ -1,0 +1,992 @@
+#!/usr/bin/env bash
+# Release template. Build with scripts/build-vps-release.mjs; never publish this file.
+# Definitions alone have no side effects. main is called only on the final line.
+
+fail() { printf 'zugoid: %s\n' "$*" >&2; exit 1; }
+say() { printf 'zugoid: %s\n' "$*"; }
+docker() { command docker --host unix:///var/run/docker.sock "$@"; }
+compose() {
+  # Shell env has priority over --env-file in Compose. Keep operator login-shell
+  # variables and remote Docker contexts from silently changing a managed Server.
+  env -i PATH="$PATH" docker --host unix:///var/run/docker.sock compose --project-name "$project" --project-directory "$dir" --env-file "$dir/.env" -f "$dir/zugoid-compose.yml" -f "$dir/compose.vps.yml" "$@"
+}
+compose_up() {
+  say 'Waiting for Server containers. This can take several minutes.'
+  local pid status=0 elapsed=0 pause=${ZUGOID_COMPOSE_POLL:-15}
+  [[ $pause =~ ^[0-9]+$ ]] || pause=15
+  compose up -d --wait --wait-timeout 600 >/dev/null &
+  pid=$!
+  # Poll every second. A finished Compose must not wait out the whole progress interval.
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+    if [[ $pause -gt 0 && $((elapsed % pause)) -eq 0 ]] && kill -0 "$pid" 2>/dev/null; then
+      say 'Still waiting for Server containers.'
+    fi
+  done
+  wait "$pid" || status=$?
+  return "$status"
+}
+cleanup() {
+  local code=$?
+  trap - EXIT
+  if [[ $restart_needed == true ]]; then compose start >/dev/null || say 'Could not restart; run zugoid start.' >&2; fi
+  [[ -z $stage ]] || rm -rf -- "$stage"
+  exit "$code"
+}
+get_env() {
+  # Generated values are single-quoted dotenv strings, never shell-sourced.
+  local value
+  value=$(sed -n "s/^$1=//p" "$dir/.env")
+  [[ $value != *$'\n'* ]] || fail "Duplicate $1 in .env"
+  value=${value#\'}; value=${value%\'}
+  printf '%s' "$value"
+}
+put_env() {
+  local key=$1 value=$2 target=$3
+  [[ $value != *"'"* && $value != *$'\n'* && $value != *$'\r'* && $value != *'\'* ]] || fail "Unsupported characters in $key"
+  printf "%s='%s'\n" "$key" "$value" >> "$target"
+}
+replace_env() {
+  local key=$1 value=$2 file=$3 tmp
+  tmp=$(mktemp "$stage/env.XXXXXXXX")
+  sed "/^$key=/d" "$file" > "$tmp"
+  put_env "$key" "$value" "$tmp"
+  install -m 600 "$tmp" "$file"
+  rm -f -- "$tmp"
+}
+need() { command -v "$1" >/dev/null || fail "Install prerequisite $1 first (apt install ca-certificates curl jq openssl util-linux)."; }
+uuid4() {
+  # The one UUID this Server keeps forever: the Worker name, its resources and
+  # server_identity all share it.
+  local value
+  value=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || fail 'This kernel does not provide a random UUID source.'
+  [[ $value =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || fail 'Invalid UUID source.'
+  printf '%s' "$value"
+}
+version_newer() {
+  # SemVer identifiers: numeric identifiers compare numerically (as strings of
+  # arbitrary length), precede text identifiers, and a final release sorts last.
+  jq -en --arg next "$1" --arg old "$2" '
+    def key:
+      capture("^(?<a>0|[1-9][0-9]*)\\.(?<b>0|[1-9][0-9]*)\\.(?<c>0|[1-9][0-9]*)(?:-(?<pre>[0-9A-Za-z.-]+))?$") |
+      [.a, .b, .c] as $core |
+      ($core | map([length, .])) +
+      [if .pre == null then [1] else [0, (.pre | split(".") | map(
+        if test("^[0-9]+$") then if test("^0[0-9]") then error("leading zero") else [0, length, .] end
+        elif length == 0 then error("empty identifier") else [1, .] end))] end];
+    ($next | key) > ($old | key)' >/dev/null
+}
+fetch() { curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --connect-timeout 20 --max-time 900 --retry 3 "$1" -o "$2"; }
+check_hash() { [[ $(sha256sum "$2" | cut -d' ' -f1) == "$1" ]] || fail "Checksum mismatch: $(basename "$2"); no installation files or data were changed."; }
+manifest_hash() {
+  local name=$1 hash
+  hash=$(jq -er --arg name "$name" '.files[$name].sha256 | select(test("^[a-f0-9]{64}$"))' "$stage/zugoid-release.json") || fail "Release does not include $name"
+  [[ $(awk -v n="$name" '$2==n {print $1}' "$stage/SHA256SUMS") == "$hash" ]] || fail "Manifest and SHA256SUMS disagree: $name"
+  printf '%s' "$hash"
+}
+sum_hash() {
+  local hash
+  hash=$(awk -v n="$1" '$2==n {print $1}' "$stage/SHA256SUMS")
+  [[ $hash =~ ^[a-f0-9]{64}$ ]] || fail "Missing or duplicate checksum: $1"
+  printf '%s' "$hash"
+}
+release_metadata() {
+  local version=$1
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail 'Use a release version, for example 1.0.0 or 0.2.0-alpha.7.'
+  base="https://github.com/inchidev/zugoid/releases/download/v$version"
+  fetch "$base/zugoid-release.json" "$stage/zugoid-release.json"
+  fetch "$base/SHA256SUMS" "$stage/SHA256SUMS"
+  local hash
+  hash=$(sum_hash zugoid-release.json)
+  check_hash "$hash" "$stage/zugoid-release.json"
+}
+validate_metadata() {
+  jq -e --arg version "$1" '.schemaVersion == 3 and .version == $version and (.releasePr > 0) and (.commit | test("^[a-f0-9]{40}$"))' "$stage/zugoid-release.json" >/dev/null || fail 'Invalid release provenance'
+}
+verified_payload() {
+  release_metadata "$pinned_version"
+  local expected name hash
+  expected=$(sum_hash zugoid-runtime-linux-amd64.tar.gz)
+  [[ $expected == "$runtime_sha" ]] || fail 'Runtime checksum differs from installer pin'
+  fetch "$base/zugoid-runtime-linux-amd64.tar.gz" "$stage/zugoid-runtime-linux-amd64.tar.gz"
+  check_hash "$runtime_sha" "$stage/zugoid-runtime-linux-amd64.tar.gz"
+  while read -r hash name; do
+    [[ $(sum_hash "$name") == "$hash" ]] || fail "Installer pin differs: $name"
+    fetch "$base/$name" "$stage/$name"
+    check_hash "$hash" "$stage/$name"
+  done <<< "$asset_pins"
+  # Verify our CLI too, before installing it. Do not trust a mutable script URL.
+  hash=$(sum_hash zugoid)
+  fetch "$base/zugoid" "$stage/zugoid"
+  check_hash "$hash" "$stage/zugoid"
+  [[ $(sha256sum "$stage/zugoid" | cut -d' ' -f1) == $(sum_hash install.sh) ]] || fail 'CLI and installer must be identical'
+}
+validate_payload_metadata() {
+  validate_metadata "$pinned_version"
+  [[ $(jq -r .commit "$stage/zugoid-release.json") == "$pinned_commit" ]] || fail 'Release commit differs from installer pin'
+  local hash name
+  while read -r hash name; do [[ $(manifest_hash "$name") == "$hash" ]] || fail "Manifest differs from installer pin: $name"; done <<< "$asset_pins"
+  [[ $(manifest_hash zugoid-runtime-linux-amd64.tar.gz) == "$runtime_sha" ]] || fail 'Manifest runtime mismatch'
+  check_hash "$(manifest_hash zugoid)" "$stage/zugoid"
+}
+preflight() {
+  [[ $EUID == 0 ]] || fail 'Run as root (sudo bash install.sh).'
+  [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail 'VPS releases currently support Linux amd64 only; ARM64 local development is separate.'
+  # OS metadata is supplied by the distribution, never by a release download.
+  . /etc/os-release
+  case "$ID:$VERSION_ID" in debian:12|debian:13|ubuntu:22.04|ubuntu:24.04) ;; *) fail 'Supported VPS systems: Debian 12/13 and Ubuntu 22.04/24.04.' ;; esac
+  os=$ID; codename=$VERSION_CODENAME
+  for tool in curl sha256sum flock tar awk sed df; do need "$tool"; done
+  [[ $(awk '/MemTotal:/ {print $2}' /proc/meminfo) -ge 1900000 ]] || fail 'At least 2 GiB RAM is required.'
+  [[ $(df -Pk /var/tmp | awk 'END {print $4}') -ge 5242880 ]] || fail 'At least 5 GiB free disk space is required.'
+  [[ ! -x /snap/bin/docker ]] || fail 'Snap Docker is unsupported; install Docker Engine from its official apt repository.'
+  [[ ${ZUGOID_AUTOUPDATE:-false} == false && -z ${ZUGOID_BACKUP_SCHEDULE:-} ]] || fail 'Scheduled updates/backups are not supported yet; use explicit zugoid upgrade and zugoid backup.'
+}
+ensure_prerequisites() {
+  if ! command -v jq >/dev/null || ! command -v openssl >/dev/null || ! command -v ss >/dev/null; then
+    apt-get update
+    apt-get install -y ca-certificates jq openssl iproute2
+  fi
+}
+ensure_docker() {
+  if ! command -v docker >/dev/null; then
+    [[ ${ZUGOID_SKIP_DOCKER_INSTALL:-false} != true ]] || fail 'Docker is missing and ZUGOID_SKIP_DOCKER_INSTALL=true.'
+    # Do not uninstall or replace an existing container runtime on the operator's host.
+    if dpkg-query -W -f='${Status}\n' docker.io podman-docker containerd runc 2>/dev/null | grep -q 'install ok installed'; then fail 'Existing container runtime detected; install Docker Engine manually before retrying.'; fi
+    apt-get update
+    apt-get install -y ca-certificates curl
+    install -m 0755 -d /etc/apt/keyrings
+    fetch "https://download.docker.com/linux/$os/gpg" "$stage/docker.asc"
+    install -m 0644 "$stage/docker.asc" /etc/apt/keyrings/docker.asc
+    printf 'deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$os" "$codename" > /etc/apt/sources.list.d/zugoid-docker.list
+    apt-get update
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    systemctl enable --now docker
+  fi
+  local major compose_version
+  major=$(docker version --format '{{.Server.Version}}' | cut -d. -f1)
+  [[ $major =~ ^[0-9]+$ && $major -ge 24 ]] || fail 'Docker Engine >= 24 must be running on the local system socket.'
+  compose_version=$(docker compose version --short); compose_version=${compose_version#v}
+  [[ $(printf '%s\n' 2.24.4 "$compose_version" | sort -V | head -1) == 2.24.4 ]] || fail 'Docker Compose >= 2.24.4 is required.'
+}
+validate_dir() {
+  [[ $dir =~ ^/[a-zA-Z0-9_./-]+$ && $dir != / && $dir != *'..'* && ! -L $dir ]] || fail 'ZUGOID_DIR must be a dedicated absolute directory, without spaces or symlinks.'
+  [[ $(realpath -m "$dir") == "$dir" ]] || fail 'ZUGOID_DIR must be canonical (no symlink parents or trailing slash).'
+}
+lock_installation() {
+  local key lock_dir
+  key=$(printf '%s' "$dir" | sha256sum | cut -c1-16)
+  lock_dir=${ZUGOID_LOCK_DIR:-/run/lock}
+  mkdir -p "$lock_dir" || fail 'Cannot create the installer lock directory. Create /run/lock (mode 1777) and retry.'
+  chmod 1777 "$lock_dir" 2>/dev/null || true
+  exec 9>"$lock_dir/zugoid-$key.lock" || fail 'Cannot open the installer lock. Create /run/lock (mode 1777) and retry.'
+  flock -n 9 || fail 'Another installer/CLI operation is running for this directory.'
+}
+load_installation() {
+  [[ -f $dir/.env && -f $dir/.zugoid-managed ]] || fail "No managed installation in $dir"
+  project=$(get_env ZUGOID_PROJECT)
+  [[ $project =~ ^zugoid-vps-[a-f0-9]{12}$ ]] || fail 'Invalid managed Compose project'
+  [[ $(cat "$dir/.zugoid-managed") == "$project" ]] || fail 'Installation ownership marker mismatch'
+  version=$(get_env ZUGOID_VERSION)
+}
+check_owned_volumes() {
+  local key name owner
+  for key in rustfs-data celld-data caddy-data caddy-config; do
+    name="${project}_$key"
+    if docker volume inspect "$name" >/dev/null 2>&1; then
+      owner=$(docker volume inspect "$name" --format '{{index .Labels "com.docker.compose.project"}}')
+      [[ $owner == "$project" ]] || fail "Refusing foreign volume $name"
+    fi
+  done
+}
+configure_new() {
+  local domain=${ZUGOID_DOMAIN:-} admin=${ZUGOID_ADMIN_USERNAME:-owner} no_tls=${ZUGOID_NO_TLS:-false} scheme=https origin address
+  [[ $admin =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]{1,30}[a-zA-Z0-9]$ ]] || fail 'ZUGOID_ADMIN_USERNAME must be 3 to 32 letters, digits, dots, hyphens or underscores.'
+  [[ $domain =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $domain == *.* && $domain != *..* ]] || fail 'Set ZUGOID_DOMAIN to a DNS name pointing to this VPS (no scheme or path).'
+  [[ $no_tls == true || $no_tls == false ]] || fail 'ZUGOID_NO_TLS must be true or false'
+  local http_port=${ZUGOID_HTTP_PORT:-80} https_port=${ZUGOID_HTTPS_PORT:-443} port
+  [[ -z ${ZUGOID_ACME_EMAIL:-} || $ZUGOID_ACME_EMAIL =~ ^[a-zA-Z0-9._+%-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]] || fail 'Invalid ZUGOID_ACME_EMAIL'
+  [[ ${ZUGOID_BACKUP_KEEP:-7} =~ ^[1-9][0-9]*$ ]] || fail 'ZUGOID_BACKUP_KEEP must be >= 1'
+  for port in "$http_port" "$https_port"; do [[ $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]] || fail 'Invalid gateway port'; done
+  [[ $http_port != "$https_port" ]] || fail 'HTTP and HTTPS ports must differ'
+  if [[ $no_tls == true ]]; then scheme=http; address=http://:80; port=$http_port; else address=$domain; port=$https_port; fi
+  origin="$scheme://$domain"
+  if [[ $scheme == http && $port != 80 || $scheme == https && $port != 443 ]]; then origin="$origin:$port"; fi
+  project="zugoid-vps-$(printf '%s' "$dir" | sha256sum | cut -c1-12)"
+  # Stage env before creating any installation files. It is not executed as shell.
+  : > "$stage/.env"
+  local key
+  for key in AUTH_SECRET SETUP_TOKEN RUSTFS_SECRET_KEY; do put_env "$key" "$(openssl rand -hex 32)" "$stage/.env"; done
+  put_env RUSTFS_ACCESS_KEY "zugoid-$(openssl rand -hex 12)" "$stage/.env"
+  put_env ZUGOID_PROJECT "$project" "$stage/.env"
+  put_env ZUGOID_VERSION "$pinned_version" "$stage/.env"
+  put_env ZUGOID_IMAGE "zugoid:$pinned_version" "$stage/.env"
+  put_env SERVER_ID "$(uuid4)" "$stage/.env"
+  put_env PUBLIC_ORIGIN "$origin" "$stage/.env"
+  put_env ZUGOID_ORIGINS "$origin" "$stage/.env"
+  put_env ZUGOID_SITE_ADDRESS "$address" "$stage/.env"
+  local bind=0.0.0.0
+  if [[ $no_tls == true && $domain == 127.0.0.1 ]]; then bind=127.0.0.1; fi
+  put_env ZUGOID_BIND "$bind" "$stage/.env"
+  put_env ZUGOID_HTTP_PORT "$http_port" "$stage/.env"
+  put_env ZUGOID_HTTPS_PORT "$https_port" "$stage/.env"
+  put_env ZUGOID_ACME_EMAIL "${ZUGOID_ACME_EMAIL:-}" "$stage/.env"
+  put_env ADMIN_USERNAME "$admin" "$stage/.env"
+  if [[ -n ${ZUGOID_ADMIN_PASSWORD:-} ]]; then
+    (( ${#ZUGOID_ADMIN_PASSWORD} >= 12 )) || fail 'ZUGOID_ADMIN_PASSWORD must be at least 12 characters'
+    put_env ADMIN_PASSWORD "$ZUGOID_ADMIN_PASSWORD" "$stage/.env"
+  fi
+  put_env RUSTFS_BUCKET cells "$stage/.env"
+  put_env AWS_REGION us-east-1 "$stage/.env"
+  put_env ZUGOID_CHANNEL "$channel" "$stage/.env"
+  put_env ZUGOID_BACKUP_KEEP "${ZUGOID_BACKUP_KEEP:-7}" "$stage/.env"
+}
+apply_files() {
+  local file
+  for file in zugoid-compose.yml compose.vps.yml Caddyfile Caddyfile.vps zugoid-release.json; do install -m 600 "$stage/$file" "$dir/$file"; done
+  # Replace only version/image, retaining all secrets and operator additions byte for byte.
+  if [[ -f $dir/.env ]]; then
+    sed '/^ZUGOID_VERSION=/d; /^ZUGOID_IMAGE=/d' "$dir/.env" > "$stage/next.env"
+    put_env ZUGOID_VERSION "$pinned_version" "$stage/next.env"
+    put_env ZUGOID_IMAGE "zugoid:$pinned_version" "$stage/next.env"
+    install -m 600 "$stage/next.env" "$dir/.env"
+  else install -m 600 "$stage/.env" "$dir/.env"; fi
+  printf '%s\n' "$project" > "$dir/.zugoid-managed"
+  install -m 700 "$stage/zugoid" "$dir/zugoid"
+}
+check_origin() {
+  local origin=$1 version=$2
+  for _ in $(seq 1 60); do
+    if curl --fail --silent --show-error --connect-timeout 3 --max-time 5 "$origin/.well-known/zugoid" -o "$stage/health.json" 2>/dev/null && jq -e --arg version "$version" --arg origin "$origin" '.product == "zugoid" and .kind == "server" and .version == $version and (.id | test("^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$")) and ((.origin == $origin) or (((.aliases // []) | index($origin)) != null))' "$stage/health.json" >/dev/null; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
+health() {
+  local origin
+  origin=$(get_env PUBLIC_ORIGIN)
+  check_origin "$origin" "${1:-$pinned_version}" || fail "Gateway discovery failed at $origin. Check DNS/firewall/certificates; inspect with: ZUGOID_DIR=$dir $dir/zugoid logs"
+}
+domain_origins() {
+  local primary item
+  primary=$(get_env PUBLIC_ORIGIN)
+  [[ -n $primary ]] || fail 'PUBLIC_ORIGIN is missing from .env'
+  local -a values=() result=("$primary")
+  if [[ -n $(get_env ZUGOID_ORIGINS) ]]; then
+    IFS=',' read -r -a values <<< "$(get_env ZUGOID_ORIGINS)"
+  fi
+  for item in "${values[@]}"; do
+    item=${item//[[:space:]]/}
+    [[ -z $item || $item == "$primary" ]] && continue
+    printf '%s\n' "${result[@]}" | grep -Fxq -- "$item" && continue
+    result+=("$item")
+  done
+  printf '%s\n' "${result[@]}"
+}
+domain_validate_host() {
+  local host=$1
+  [[ $host =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $host == *.* && $host != *..* ]] || fail 'Enter a hostname such as chat.example.com (no scheme or path).'
+  [[ ${host,,} != *localhost* ]] || fail 'localhost is not a public Server address.'
+}
+domain_origin() {
+  local host=$1 primary scheme authority port='' origin
+  primary=$(get_env PUBLIC_ORIGIN)
+  scheme=${primary%%://*}
+  authority=${primary#*://}
+  if [[ $authority == *:* ]]; then port=${authority##*:}; fi
+  [[ $scheme == http || $scheme == https ]] || fail 'PUBLIC_ORIGIN must be an http or https origin.'
+  origin="$scheme://$host"
+  if [[ -n $port && ( ( $scheme == http && $port != 80 ) || ( $scheme == https && $port != 443 ) ) ]]; then origin="$origin:$port"; fi
+  printf '%s' "$origin"
+}
+domain_health() {
+  local origin
+  for origin in "$@"; do
+    if ! check_origin "$origin" "$version"; then
+      say "Address $origin did not pass health checks." >&2
+      return 1
+    fi
+  done
+}
+domain_apply() {
+  local -a origins=("$@") hosts=() seen=()
+  local primary origin host scheme value
+  primary=$(get_env PUBLIC_ORIGIN)
+  scheme=${primary%%://*}
+  [[ " ${origins[*]} " == *" $primary "* ]] || origins=("$primary" "${origins[@]}")
+  for origin in "${origins[@]}"; do
+    [[ $origin == "$scheme://"* ]] || { say "Every address must use $scheme." >&2; return 1; }
+    [[ " ${seen[*]} " == *" $origin "* ]] && continue
+    seen+=("$origin")
+    host=${origin#*://}; host=${host%%:*}
+    hosts+=("$host")
+  done
+  value=$(IFS=,; printf '%s' "${seen[*]}")
+  replace_env ZUGOID_ORIGINS "$value" "$dir/.env" || return 1
+  if [[ $scheme == http ]]; then
+    replace_env ZUGOID_SITE_ADDRESS 'http://:80' "$dir/.env" || return 1
+  else
+    value=$(IFS=,; printf '%s' "${hosts[*]}")
+    replace_env ZUGOID_SITE_ADDRESS "$value" "$dir/.env" || return 1
+  fi
+  compose_up || return 1
+  domain_health "${seen[@]}"
+}
+domain_change() {
+  local next_primary=$1 previous
+  shift
+  previous=$(mktemp "$stage/env.XXXXXXXX")
+  cp -p "$dir/.env" "$previous"
+  if [[ -n $next_primary ]]; then replace_env PUBLIC_ORIGIN "$next_primary" "$dir/.env"; fi
+  if ! domain_apply "$@"; then
+    install -m 600 "$previous" "$dir/.env"
+    compose_up || true
+    rm -f -- "$previous"
+    fail 'The address change did not pass its checks; the previous configuration was restored.'
+  fi
+  rm -f -- "$previous"
+}
+domain_add() {
+  local host=${1:-} origin item
+  [[ -n $host ]] || fail 'Usage: zugoid domain add <hostname>'
+  domain_validate_host "$host"
+  host=${host,,}
+  origin=$(domain_origin "$host")
+  local -a origins=()
+  mapfile -t origins < <(domain_origins)
+  for item in "${origins[@]}"; do
+    [[ $item == "$origin" ]] && { say "Already connected: $origin"; return; }
+  done
+  origins+=("$origin")
+  say "Point DNS for $host at this VPS; checking every address after the change."
+  domain_change '' "${origins[@]}"
+  say "Added $origin. Keep DNS pointed here so certificates keep renewing."
+}
+domain_remove() {
+  local host=${1:-} origin primary item
+  [[ -n $host ]] || fail 'Usage: zugoid domain remove <hostname>'
+  domain_validate_host "$host"
+  host=${host,,}
+  origin=$(domain_origin "$host")
+  primary=$(get_env PUBLIC_ORIGIN)
+  [[ $origin != "$primary" ]] || fail 'Choose another primary before removing this address.'
+  local -a origins=() next=()
+  mapfile -t origins < <(domain_origins)
+  for item in "${origins[@]}"; do
+    [[ $item == "$origin" ]] || next+=("$item")
+  done
+  [[ ${#next[@]} -lt ${#origins[@]} ]] || fail "Not connected: $origin"
+  domain_change '' "${next[@]}"
+  say "Removed $origin"
+}
+domain_primary() {
+  local host=${1:-} origin primary item found=false
+  [[ -n $host ]] || fail 'Usage: zugoid domain primary <hostname>'
+  domain_validate_host "$host"
+  host=${host,,}
+  origin=$(domain_origin "$host")
+  primary=$(get_env PUBLIC_ORIGIN)
+  [[ $origin == "$primary" ]] && { say "$origin is already primary."; return; }
+  local -a origins=() next=("$origin")
+  mapfile -t origins < <(domain_origins)
+  for item in "${origins[@]}"; do
+    if [[ $item == "$origin" ]]; then found=true; else next+=("$item"); fi
+  done
+  [[ $found == true ]] || fail "Connect the address first: zugoid domain add $host"
+  domain_change "$origin" "${next[@]}"
+  say "Primary address: $origin"
+}
+domain_list() {
+  local origin primary
+  primary=$(get_env PUBLIC_ORIGIN)
+  while IFS= read -r origin; do
+    if [[ $origin == "$primary" ]]; then printf 'primary  %s\n' "$origin"; else printf 'alias    %s\n' "$origin"; fi
+  done < <(domain_origins)
+}
+domain_command() {
+  local action=${1:-list}
+  case "$action" in
+    list) domain_list ;;
+    add) [[ $# == 2 ]] || fail 'Usage: zugoid domain add <hostname>'; domain_add "$2" ;;
+    remove) [[ $# == 2 ]] || fail 'Usage: zugoid domain remove <hostname>'; domain_remove "$2" ;;
+    primary) [[ $# == 2 ]] || fail 'Usage: zugoid domain primary <hostname>'; domain_primary "$2" ;;
+    *) fail 'Usage: zugoid domain list|add <hostname>|remove <hostname>|primary <hostname>' ;;
+  esac
+}
+print_result() {
+  say "Server $pinned_version: $(get_env PUBLIC_ORIGIN)"
+  if jq -e '.ready == false' "$stage/health.json" >/dev/null; then
+    # No installer log or setup.url file. Explicit operator terminal output only.
+    printf 'Claim owner: %s/setup#claim=%s\n' "$(get_env PUBLIC_ORIGIN)" "$(get_env SETUP_TOKEN)"
+  elif [[ -n $(get_env ADMIN_PASSWORD) ]]; then
+    say "Sign in as $(get_env ADMIN_USERNAME) with ZUGOID_ADMIN_PASSWORD."
+  fi
+  say 'Keep an encrypted off-host copy of .env and backups. Operations: zugoid status | logs | backup | upgrade | restore | domain | uninstall'
+}
+backup_stack() {
+  check_owned_volumes
+  local key file work archive
+  local keep
+  keep=$(get_env ZUGOID_BACKUP_KEEP); keep=${keep:-7}
+  [[ $keep =~ ^[0-9]+$ && $keep -ge 1 ]] || fail 'ZUGOID_BACKUP_KEEP must be >= 1'
+  docker image inspect alpine:3.24 >/dev/null 2>&1 || docker pull alpine:3.24 >/dev/null
+  mkdir -p "$backup_dir"; chmod 700 "$backup_dir"
+  work=$(mktemp -d "$backup_dir/.partial-XXXXXXXX")
+  archive="$backup_dir/zugoid-backup-$project-$(date -u +%Y%m%dT%H%M%S)-$(openssl rand -hex 4).tar.gz"
+  restart_needed=true
+  compose stop >/dev/null
+  for file in .env .zugoid-managed zugoid-compose.yml compose.vps.yml Caddyfile Caddyfile.vps zugoid-release.json zugoid; do cp -p "$dir/$file" "$work/$file"; done
+  for key in rustfs-data celld-data caddy-data caddy-config; do
+    docker run --rm --network none --read-only --mount "type=volume,src=${project}_$key,dst=/source,readonly" alpine:3.24 tar -C /source -cf - . > "$work/$key.tar"
+  done
+  (cd "$work"; sha256sum .env .zugoid-managed zugoid-compose.yml compose.vps.yml Caddyfile Caddyfile.vps zugoid-release.json zugoid ./*.tar > SHA256SUMS; tar -czf "$archive.partial" .)
+  chmod 600 "$archive.partial"
+  mv "$archive.partial" "$archive"
+  rm -rf -- "$work"
+  compose_up
+  restart_needed=false
+  backup_result=$archive
+  say "Backup: $archive"
+  # Rotation is explicit, restricted to this installation's separate backup directory.
+  mapfile -t old_backups < <(find "$backup_dir" -maxdepth 1 -type f -name "zugoid-backup-$project-*.tar.gz" | sort -r | tail -n "+$((keep + 1))")
+  if [[ ${#old_backups[@]} -gt 0 ]]; then rm -- "${old_backups[@]}"; fi
+}
+unpack_backup() {
+  local archive=$1 entry
+  [[ -f $archive ]] || fail 'Backup file not found'
+  mkdir "$stage/restore"
+  # Outer backup contains only these regular files, no directories/links/paths.
+  while IFS= read -r entry; do
+    case "$entry" in ./|./.env|./.zugoid-managed|./zugoid-compose.yml|./compose.vps.yml|./Caddyfile|./Caddyfile.vps|./zugoid-release.json|./zugoid|./SHA256SUMS|./rustfs-data.tar|./celld-data.tar|./caddy-data.tar|./caddy-config.tar) ;; *) fail "Unsafe backup member: $entry" ;; esac
+  done < <(tar -tzf "$archive")
+  [[ -z $(tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d"') ]] || fail 'Backup contains links or special files'
+  tar -xzf "$archive" --no-same-owner -C "$stage/restore"
+  (cd "$stage/restore"; sha256sum --check --status SHA256SUMS) || fail 'Backup checksum verification failed'
+  for entry in .env .zugoid-managed zugoid-compose.yml compose.vps.yml Caddyfile Caddyfile.vps zugoid-release.json zugoid rustfs-data.tar celld-data.tar caddy-data.tar caddy-config.tar; do [[ -f $stage/restore/$entry ]] || fail "Incomplete backup: $entry"; done
+}
+restore_volumes() {
+  local key
+  check_owned_volumes
+  for key in rustfs-data celld-data caddy-data caddy-config; do
+    if ! docker volume inspect "${project}_$key" >/dev/null 2>&1; then docker volume create --label "com.docker.compose.project=$project" --label "com.docker.compose.volume=$key" "${project}_$key" >/dev/null; fi
+    docker run --rm --network none --read-only --mount "type=volume,src=${project}_$key,dst=/data" alpine:3.24 sh -c 'test -z "$(ls -A /data)"' || fail "Restore requires empty volume ${project}_$key"
+  done
+  for key in rustfs-data celld-data caddy-data caddy-config; do
+    docker run --rm -i --network none --read-only --mount "type=volume,src=${project}_$key,dst=/data" alpine:3.24 tar -C /data -xf - < "$stage/restore/$key.tar"
+  done
+}
+restore_files() {
+  local file
+  for file in .env .zugoid-managed zugoid-compose.yml compose.vps.yml Caddyfile Caddyfile.vps zugoid-release.json zugoid; do install -m 600 "$stage/restore/$file" "$dir/$file"; done
+  chmod 700 "$dir/zugoid"
+}
+rollback() {
+  say 'Upgrade failed; restoring the previous image, configuration and all data.' >&2
+  unpack_backup "$backup_result"
+  # Use the backed-up Compose even when the failed release has invalid config.
+  restore_files
+  compose down --remove-orphans >/dev/null
+  check_owned_volumes
+  local key
+  for key in rustfs-data celld-data caddy-data caddy-config; do docker volume rm "${project}_$key" >/dev/null; done
+  load_installation
+  restore_volumes
+  compose_up
+  health "$version"
+  say "Recovered $version. Backup retained at $backup_result" >&2
+}
+install_server() {
+  preflight
+  validate_dir
+  lock_installation
+  if [[ -e $dir/.zugoid-managed ]]; then
+    load_installation
+    [[ $version == "$pinned_version" ]] || fail 'An existing Server has another version; use zugoid upgrade <version>.'
+    ensure_docker
+    check_owned_volumes
+    compose_up
+    health
+    install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+    print_result
+    factory_rerun_notice
+    return
+  fi
+  [[ ! -e $dir || ( -d $dir && -z $(ls -A "$dir") ) ]] || fail 'ZUGOID_DIR exists and is not an empty directory or a managed installation.'
+  [[ $pinned_version != *-* || $channel == prerelease ]] || fail 'This is a prerelease. Review it and explicitly set ZUGOID_CHANNEL=prerelease.'
+  say "Verifying release $pinned_version before installation."
+  verified_payload
+  ensure_prerequisites
+  validate_payload_metadata
+  configure_new
+  local port
+  for port in "$(sed -n "s/^ZUGOID_HTTP_PORT='\(.*\)'/\1/p" "$stage/.env")" "$(sed -n "s/^ZUGOID_HTTPS_PORT='\(.*\)'/\1/p" "$stage/.env")"; do
+    [[ -z $(ss -H -ltnu "sport = :$port") ]] || fail "Port $port is occupied; free it before installing."
+  done
+  ensure_docker
+  local key
+  for key in rustfs-data celld-data caddy-data caddy-config; do
+    if docker volume inspect "${project}_$key" >/dev/null 2>&1; then fail 'Live volumes already exist without this installation configuration; restore the original .env or a backup.'; fi
+  done
+  docker load -i "$stage/zugoid-runtime-linux-amd64.tar.gz" >/dev/null
+  [[ $(docker image inspect "zugoid:$pinned_version" --format '{{.Os}}/{{.Architecture}}') == linux/amd64 ]] || fail 'Runtime image architecture mismatch'
+  install -m 700 -d "$dir"
+  apply_files
+  install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+  say 'Starting standalone Server and checking its public origin.'
+  compose_up
+  health
+  print_result
+  enable_optional_factory
+}
+upgrade_server() {
+  local requested=${1:-} current=$version
+  [[ -z $requested || $requested =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail 'Invalid version'
+  if [[ -z $requested ]]; then
+    [[ $channel == stable ]] || fail 'Prerelease upgrades require an explicit version: zugoid upgrade <version>.'
+    if ! fetch https://api.github.com/repos/inchidev/zugoid/releases/latest "$stage/latest.json"; then fail 'No stable release available; select a published version with its explicit channel.'; fi
+    requested=$(jq -er 'select(.draft == false and .prerelease == false) | .tag_name' "$stage/latest.json") || fail 'No stable release exists; select a prerelease explicitly.'
+    requested=${requested#v}
+  fi
+  [[ $requested != *-* || $channel == prerelease ]] || fail 'Set ZUGOID_CHANNEL=prerelease to select a prerelease.'
+  [[ $requested != "$current" ]] || { say "Already on $current"; return; }
+  version_newer "$requested" "$current" || fail 'Downgrades or invalid versions are refused; restore a complete backup instead.'
+  release_metadata "$requested"
+  validate_metadata "$requested"
+  local hash
+  hash=$(manifest_hash install.sh)
+  fetch "$base/install.sh" "$stage/next-install.sh"
+  check_hash "$hash" "$stage/next-install.sh"
+  # Hand over to the verified new release implementation, retaining the lock FD.
+  ZUGOID_DIR="$dir" ZUGOID_CHANNEL="$channel" bash "$stage/next-install.sh" apply-upgrade
+}
+apply_upgrade() {
+  [[ -e /proc/$$/fd/9 ]] || lock_installation
+  [[ -f $dir/.env ]] || fail 'No existing installation'
+  load_installation
+  [[ $version != "$pinned_version" ]] || fail 'Already installed'
+  # The installed CLI checks SemVer and downloads this pinned script. Recheck here.
+  version_newer "$pinned_version" "$version" || fail 'Downgrades are refused'
+  verified_payload
+  validate_payload_metadata
+  ensure_docker
+  docker load -i "$stage/zugoid-runtime-linux-amd64.tar.gz" >/dev/null
+  [[ $(docker image inspect "zugoid:$pinned_version" --format '{{.Os}}/{{.Architecture}}') == linux/amd64 ]] || fail 'Runtime image architecture mismatch'
+  # Fetch the helper before stopping the Server; backup/rollback work offline.
+  docker image inspect alpine:3.24 >/dev/null 2>&1 || docker pull alpine:3.24 >/dev/null
+  backup_stack
+  local result
+  set +e
+  (trap - EXIT; set -e; apply_files; compose_up; health)
+  result=$?
+  set -e
+  if [[ $result != 0 ]]; then rollback; fail 'Upgrade did not succeed; previous Server restored.'; fi
+  install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+  say "Upgraded $version -> $pinned_version; backup: $backup_result"
+  upgrade_factory
+}
+restore_server() {
+  preflight
+  validate_dir
+  lock_installation
+  [[ ! -e $dir ]] || fail 'Restore into a new ZUGOID_DIR on a fresh host; the target directory must not exist.'
+  unpack_backup "$1"
+  ensure_prerequisites
+  # Download/verify/load the backup's pinned version before any data is restored.
+  local restore_version hash
+  restore_version=$(jq -er .version "$stage/restore/zugoid-release.json")
+  release_metadata "$restore_version"
+  validate_metadata "$restore_version"
+  hash=$(manifest_hash zugoid-runtime-linux-amd64.tar.gz)
+  fetch "$base/zugoid-runtime-linux-amd64.tar.gz" "$stage/zugoid-runtime-linux-amd64.tar.gz"
+  check_hash "$hash" "$stage/zugoid-runtime-linux-amd64.tar.gz"
+  ensure_docker
+  docker load -i "$stage/zugoid-runtime-linux-amd64.tar.gz" >/dev/null
+  [[ $(docker image inspect "zugoid:$restore_version" --format '{{.Os}}/{{.Architecture}}') == linux/amd64 ]] || fail 'Runtime image architecture mismatch'
+  install -m 700 -d "$dir"
+  restore_files
+  load_installation
+  restore_volumes
+  compose_up
+  health "$version"
+  install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+  say "Restored Server $version: $(get_env PUBLIC_ORIGIN). Preserve its DNS/origin and encryption secrets."
+}
+uninstall_server() {
+  local purge=false backup=true confirmed=false option key
+  for option in "$@"; do case "$option" in --purge) purge=true ;; --no-backup) backup=false ;; --yes) confirmed=true ;; *) fail "Unknown option: $option" ;; esac; done
+  if [[ $confirmed != true ]]; then
+    printf 'Stop %s%s? Type its project name to confirm: ' "$project" "$([[ $purge == true ]] && printf ' and permanently delete its live volumes')" > /dev/tty
+    read -r option < /dev/tty
+    [[ $option == "$project" ]] || fail 'Cancelled'
+  fi
+  check_owned_volumes
+  if [[ $backup == true ]]; then backup_stack; fi
+  if [[ -f $(factory_unit_file) ]] && systemd_available; then systemctl disable --now "$(factory_service)"; fi
+  compose down --remove-orphans >/dev/null
+  if [[ $purge == true ]]; then
+    for key in rustfs-data celld-data caddy-data caddy-config; do docker volume rm "${project}_$key" >/dev/null; done
+  fi
+  # Keep .env and the CLI for recovery. Never remove Docker, shared images or backups.
+  say "Stopped $project. Live volumes purged: $purge. Configuration: $dir. Backups: $backup_dir"
+}
+factory_service() { printf 'zugoid-factory-%s' "$project"; }
+factory_unit_file() { printf '%s/%s.service' "${ZUGOID_UNIT_DIR:-/etc/systemd/system}" "$(factory_service)"; }
+systemd_available() { [[ -d ${ZUGOID_SYSTEMD_DIR:-/run/systemd/system} ]]; }
+require_factory_systemd() {
+  systemd_available || fail 'Factory status, logs, restart, disable and backup need systemd as PID 1 (/run/systemd/system). On a host without systemd, start the released node by hand. See the Software Factory docs. Source disks stay on disk.'
+}
+workspace_image_accepted() {
+  local loaded=$1 pin
+  [[ $loaded =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
+  while IFS= read -r pin; do
+    [[ -n $pin && $loaded == "$pin" ]] && return 0
+  done < <(jq -r '[.image, .configDigest, .indexDigest] | .[] | select(. != null and . != "")' "$stage/zugoid-factory.json")
+  return 1
+}
+# A Server update replaces the local Compute Node from the same verified release, so the Node never
+# lags the Server's protocol. A Node whose service was removed is left as the operator left it.
+upgrade_factory() {
+  [[ -f $dir/factory/factory.env ]] || return 0
+  version=$pinned_version
+  if [[ ! -f $(factory_unit_file) ]]; then
+    say 'The local Compute Node files are from an earlier release, and its service is not installed, so the update left them alone. Replace them with: sudo zugoid compute enable --trust-shared-kernel (add --no-systemd on a host without systemd)'
+    return 0
+  fi
+  say "Replacing the local Compute Node with $version."
+  # The Server is upgraded and healthy; a failed Node replacement must not roll it back.
+  if ! (trap - EXIT; factory_command enable --trust-shared-kernel); then
+    say 'Server upgraded. The local Compute Node was not replaced and gets no work until it is. Retry with: sudo zugoid compute enable --trust-shared-kernel'
+  fi
+}
+factory_rerun_notice() {
+  if [[ ${ZUGOID_FACTORY:-false} == true && ! -f $dir/factory/factory.env ]]; then
+    say 'ZUGOID_FACTORY=true was set, but this installation has no Factory executor yet. Enable it with: sudo zugoid factory enable --trust-shared-kernel'
+  fi
+}
+enable_optional_factory() {
+  [[ ${ZUGOID_FACTORY:-false} == true ]] || return 0
+  version=$pinned_version
+  # A failed optional step must not exit the Server install or run the EXIT trap that deletes the download stage.
+  if ! (trap - EXIT; factory_command enable); then
+    say 'Server installed. Optional Factory did not start. Retry with: sudo zugoid factory enable --trust-shared-kernel'
+    say 'A host without systemd can use: sudo zugoid factory enable --trust-shared-kernel --no-systemd'
+  fi
+}
+factory_command() {
+  local action=${1:-status} unit image architecture hash asset expected
+  unit=$(factory_service)
+  case "$action" in
+    enable)
+      local trust=false no_systemd=false option tool tag loaded replacing='' kept='' free_bytes=18253611008
+      for option in "${@:2}"; do
+        case "$option" in
+          --trust-shared-kernel) trust=true ;;
+          --no-systemd) no_systemd=true ;;
+          *) fail "Unknown option: $option" ;;
+        esac
+      done
+      [[ $trust == true || ${ZUGOID_SHARED_KERNEL_TRUSTED:-} == 1 ]] || fail 'Docker shares the host kernel. Run zugoid factory enable --trust-shared-kernel only for trusted code/users.'
+      [[ ${ZUGOID_FACTORY_NO_SYSTEMD:-} == 1 ]] && no_systemd=true
+      for tool in fallocate mkfs.ext4 mount umount findmnt losetup tar; do need "$tool"; done
+      if [[ $no_systemd != true ]]; then need systemctl; fi
+      [[ $(uname -m) == x86_64 ]] || fail 'The released Compute Node supports Linux amd64.'
+      # A Node being replaced already holds its Task disks; it needs room for the new box image only.
+      [[ -f $dir/factory/factory.env ]] && free_bytes=8589934592
+      [[ $(df --output=avail -B1 "$dir" | tail -1 | tr -d ' ') -ge $free_bytes ]] || fail "Compute Node needs $((free_bytes / 1073741824)) GiB free disk capacity for its box image, a 10 GiB Task disk when it is new and reserve for the Server."
+      [[ $(awk '/MemAvailable:/ {print $2}' /proc/meminfo) -ge 2097152 ]] || fail 'Factory needs 2 GiB available RAM, including reserve for the Server.'
+      release_metadata "$version"
+      validate_metadata "$version"
+      say 'Downloading the verified Factory image and Compute Node.'
+      for asset in zugoid-factory.json zugoid-compute-node-linux-amd64.tgz zugoid-workspace-linux-amd64.tar.gz; do
+        hash=$(manifest_hash "$asset")
+        fetch "$base/$asset" "$stage/$asset"
+        check_hash "$hash" "$stage/$asset"
+      done
+      jq -e --arg version "$version" '.schemaVersion==1 and .version==$version and (.image | test("^sha256:[a-f0-9]{64}$"))' "$stage/zugoid-factory.json" >/dev/null || fail 'Invalid Factory release identity'
+      for asset in zugoid-compute-node-linux-amd64.tgz zugoid-workspace-linux-amd64.tar.gz; do
+        expected=$(jq -er --arg name "$asset" '.files[$name].sha256' "$stage/zugoid-factory.json")
+        check_hash "$expected" "$stage/$asset"
+      done
+      # Extraction is restricted to regular files below fixed node/src paths.
+      tar -tzf "$stage/zugoid-compute-node-linux-amd64.tgz" | while IFS= read -r asset; do
+        case "$asset" in node|LICENSE|LICENSE.node|src/|src/*.mjs) [[ $asset != *..* ]] || exit 1 ;; *) exit 1 ;; esac
+      done || fail 'Unsafe Compute Node archive'
+      tar -tvzf "$stage/zugoid-compute-node-linux-amd64.tgz" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {exit 1}' || fail 'Unsafe Compute Node archive links'
+      if [[ -f $dir/factory/factory.env ]]; then
+        # An installed Node of another release is replaced in place: the same Node and pairing, its
+        # boxes and their disks, with this release's daemon and box image. Its own tuning is kept.
+        expected=$(sed -n 's/^ZUGOID_WORKSPACE_IMAGE=//p' "$dir/factory/factory.env")
+        workspace_image_accepted "$expected" || replacing=$expected
+        kept=$(grep -E '^ZUGOID_(NODE_BOXES|WORKSPACE_DISK_BYTES)=[0-9]+$' "$dir/factory/factory.env" || true)
+      fi
+      if [[ $no_systemd != true ]] && ! systemd_available; then
+        fail 'Factory needs systemd as PID 1 (/run/systemd/system) before it writes executor files. The Server install can continue without Factory. For a manual executor: zugoid factory enable --trust-shared-kernel --no-systemd'
+      fi
+      install -m 700 -d "$dir/factory" "$dir/factory/releases/$version" "$dir/factory/state"
+      tar -xzf "$stage/zugoid-compute-node-linux-amd64.tgz" --no-same-owner -C "$dir/factory/releases/$version"
+      chmod 700 "$dir/factory/releases/$version/node"
+      say 'Loading the box image. This can take several minutes.'
+      docker load -i "$stage/zugoid-workspace-linux-amd64.tar.gz" >/dev/null
+      tag="zugoid-workspace:$version"
+      loaded=$(docker image inspect "$tag" --format '{{.Id}}' 2>/dev/null) || fail "Box image $tag was not loaded."
+      workspace_image_accepted "$loaded" || fail "Loaded box image $loaded does not match a published Factory digest. Classic and containerd stores report different ids; the release lists image, configDigest and indexDigest."
+      image=$loaded
+      architecture=$(docker image inspect "$image" --format '{{.Os}}/{{.Architecture}}')
+      [[ $architecture == linux/amd64 ]] || fail 'Box image architecture mismatch'
+      # Probe the actual hard-quota filesystem before installing or pairing the service.
+      "$dir/factory/releases/$version/node" --input-type=module - "$dir/factory/releases/$version/src/disk-store.mjs" "$dir/factory/state/probe-disks" <<'PROBE'
+import { pathToFileURL } from 'node:url';
+const { LoopDiskStore } = await import(pathToFileURL(process.argv[2]));
+const store = new LoopDiskStore(process.argv[3], { bytes: 33554432, maxDisks: 1 });
+await store.initialize(); const id = crypto.randomUUID();
+try { await store.ensure(id, true) } finally { await store.remove(id) }
+PROBE
+      # The running Node stops only once this release's files and image are verified and its disk probe passed.
+      if [[ $no_systemd != true ]]; then systemctl stop "$unit" 2>/dev/null || true; fi
+      cat > "$stage/factory.env" <<CONFIG
+ZUGOID_SERVER_ORIGIN=$(get_env PUBLIC_ORIGIN)
+ZUGOID_NODE_STATE=$dir/factory/state
+ZUGOID_WORKSPACE_IMAGE=$image
+ZUGOID_SHARED_KERNEL_TRUSTED=1
+CONFIG
+      [[ -z $kept ]] || printf '%s\n' "$kept" >> "$stage/factory.env"
+      install -m 600 "$stage/factory.env" "$dir/factory/factory.env"
+      if [[ $no_systemd == true ]]; then
+        say 'Local Factory files are ready without systemd. Claim the Server Owner, then start the executor with the environment file above:'
+        say "$dir/factory/releases/$version/node $dir/factory/releases/$version/src/pair-local.mjs $dir/.env"
+        say "$dir/factory/releases/$version/node $dir/factory/releases/$version/src/daemon.mjs"
+        say "Keep ZUGOID_SERVER_ORIGIN, ZUGOID_NODE_STATE, ZUGOID_WORKSPACE_IMAGE and ZUGOID_SHARED_KERNEL_TRUSTED from $dir/factory/factory.env."
+      else
+      cat > "$stage/$unit.service" <<UNIT
+[Unit]
+Description=Zugoid trusted local Compute Node ($project)
+After=docker.service network-online.target
+Requires=docker.service
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+User=root
+UMask=0077
+EnvironmentFile=$dir/factory/factory.env
+ExecStartPre=$dir/factory/releases/$version/node $dir/factory/releases/$version/src/pair-local.mjs $dir/.env
+ExecStart=$dir/factory/releases/$version/node $dir/factory/releases/$version/src/daemon.mjs
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=180
+CPUQuota=100%
+MemoryMax=256M
+[Install]
+WantedBy=multi-user.target
+UNIT
+      install -m 644 "$stage/$unit.service" "$(factory_unit_file)"
+      systemctl daemon-reload
+      systemctl enable --now "$unit"
+      if [[ -n $replacing ]]; then
+        # The service runs this release now; the earlier release's binaries and box image are ours to drop.
+        for asset in "$dir/factory/releases"/*; do
+          if [[ -d $asset && $(basename "$asset") != "$version" ]]; then rm -rf -- "$asset"; fi
+        done
+        docker image rm "$replacing" >/dev/null 2>&1 || true
+        say "Local Compute Node replaced with $version. It keeps its pairing, its boxes and their Task disks; it pairs again with this release's protocol as it starts."
+      else
+        say 'Local Factory installed. Claim the Server Owner first if needed; pairing then happens automatically. Open Settings → Repositories to select this executor. Existing remote providers are preserved.'
+      fi
+      fi
+      old_disks_notice
+      ;;
+    status) require_factory_systemd; systemctl --no-pager status "$unit" ;;
+    logs) require_factory_systemd; journalctl -u "$unit" -n 100 --no-pager || fail 'Could not read Factory logs. systemd journal is unavailable.' ;;
+    restart) require_factory_systemd; systemctl restart "$unit" ;;
+    disable) require_factory_systemd; systemctl disable --now "$unit"; say 'Local executor stopped. All Task disks retained.' ;;
+    backup)
+      require_factory_systemd
+      [[ -d $dir/factory/state ]] || fail 'No local Factory state exists.'
+      systemctl stop "$unit"
+      sync
+      mkdir -p "$backup_dir"; chmod 700 "$backup_dir"
+      asset="$backup_dir/factory-$project-$(date -u +%Y%m%dT%H%M%S).tar.gz"
+      # Loop-mounted directories are excluded; their complete backing disks are retained.
+      tar --one-file-system -czf "$asset.partial" -C "$dir" factory
+      mv "$asset.partial" "$asset"; chmod 600 "$asset"
+      say "Factory Task disks and Node state exported to $asset. Executor remains stopped; use zugoid factory restart to continue."
+      ;;
+    release-old-disks) release_old_disks "${2:-}" ;;
+    remove)
+      [[ ${2:-} == --keep-source ]] || fail 'Use zugoid factory remove --keep-source. A Task disk is deleted only when its Task is Done.'
+      if systemd_available; then
+        systemctl disable --now "$unit" 2>/dev/null || true
+        rm -f -- "$(factory_unit_file)"
+        systemctl daemon-reload || fail 'Could not reload systemd after removing the Factory service.'
+      else
+        rm -f -- "$(factory_unit_file)"
+        say 'systemd is not running. No service was stopped. Stop any manual node process yourself.'
+      fi
+      say "Service removed. Task disks, binaries, Node state and backups retained in $dir/factory and $backup_dir."
+      ;;
+    *) fail 'Usage: zugoid factory enable --trust-shared-kernel [--no-systemd]|status|logs|restart|disable|backup|release-old-disks [--yes]|remove --keep-source' ;;
+  esac
+}
+# The per-command Factory before 0.0.10 kept a workspace disk per Task in workspace-disks. The Server
+# dropped those workspaces in migration 0004, so no Node uses them; they stay until the operator releases them.
+old_workspace_disks() {
+  local image name
+  for image in "$dir/factory/state/workspace-disks"/*.img; do
+    [[ -f $image ]] || continue
+    name=$(basename "$image" .img)
+    if [[ $name =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then printf '%s\n' "$name"; fi
+  done
+  return 0
+}
+old_disks_notice() {
+  local count
+  count=$(old_workspace_disks | wc -l | tr -d ' ')
+  [[ $count == 0 ]] || say "$count workspace disks of the per-command Factory before 0.0.10 are kept in $dir/factory/state/workspace-disks. No Task uses them now. Export them with zugoid compute backup, then delete them with zugoid compute release-old-disks --yes."
+}
+release_old_disks() {
+  local root=$dir/factory/state/workspace-disks name server_id count
+  count=$(old_workspace_disks | wc -l | tr -d ' ')
+  if [[ $count == 0 ]]; then say 'No workspace disks of the per-command Factory remain.'; return 0; fi
+  if [[ ${1:-} != --yes ]]; then
+    say "$count workspace disks of the per-command Factory are kept in $root. Nothing was deleted. Export them with zugoid compute backup first; zugoid compute release-old-disks --yes deletes them permanently."
+    return 0
+  fi
+  server_id=$(get_env SERVER_ID)
+  while IFS= read -r name; do
+    if findmnt -rn --mountpoint "$root/$name" >/dev/null 2>&1; then umount "$root/$name" || fail "Could not unmount $root/$name; stop whatever uses it and retry."; fi
+    # Its Docker volume was a bind entry; only one this Server labelled is removed.
+    if [[ $(docker volume inspect "zugoid-ws-$name" --format '{{index .Labels "zugoid.server"}}' 2>/dev/null) == "$server_id" ]]; then docker volume rm "zugoid-ws-$name" >/dev/null 2>&1 || true; fi
+    rm -rf -- "${root:?}/$name"
+    rm -f -- "$root/$name.img"
+  done < <(old_workspace_disks)
+  say "Released $count workspace disks of the per-command Factory. Box disks of current Tasks are untouched."
+}
+
+# Diagnostic commands are bounded, use only the local daemon and never print
+# Compose config, container environments, response bodies or raw error output.
+doctor_docker() { timeout 15 docker --host unix:///var/run/docker.sock "$@"; }
+doctor_compose() {
+  timeout 15 env -i PATH="$PATH" docker --host unix:///var/run/docker.sock compose --project-name "$project" --project-directory "$dir" --env-file "$dir/.env" -f "$dir/zugoid-compose.yml" -f "$dir/compose.vps.yml" "$@"
+}
+doctor_ok() { printf 'OK   %s\n' "$*"; }
+doctor_fail() { printf 'FAIL %s\n' "$*"; doctor_failed=1; }
+doctor_server() {
+  local doctor_failed=0 tool key value config_ok=true daemon_ok=true service origins origin code server_id rows
+  for tool in docker jq curl timeout; do
+    if ! type -P "$tool" >/dev/null; then doctor_fail "Missing prerequisite: $tool"; fi
+  done
+  [[ $doctor_failed == 0 ]] || return 1
+  if ! (load_installation) >/dev/null 2>&1; then
+    doctor_fail 'Managed installation is missing or invalid. Check ZUGOID_DIR, .env and .zugoid-managed.'
+    return 1
+  fi
+  load_installation
+  for key in AUTH_SECRET SETUP_TOKEN RUSTFS_ACCESS_KEY RUSTFS_SECRET_KEY SERVER_ID PUBLIC_ORIGIN ZUGOID_IMAGE; do
+    if ! value=$(get_env "$key") || [[ -z $value ]]; then doctor_fail "Missing or duplicate setting: $key"; config_ok=false; fi
+  done
+  server_id=$(get_env SERVER_ID 2>/dev/null) || server_id=''
+  if [[ ! $server_id =~ ^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$ ]]; then
+    doctor_fail 'SERVER_ID must be the saved Server UUIDv4.'; config_ok=false
+  fi
+  if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+    doctor_fail 'ZUGOID_VERSION is invalid.'; config_ok=false
+  fi
+  for key in AUTH_SECRET SETUP_TOKEN; do
+    value=$(get_env "$key" 2>/dev/null) || value=''
+    if [[ ${#value} -lt 32 ]]; then doctor_fail "$key must have at least 32 characters."; config_ok=false; fi
+  done
+  if ! doctor_compose config --quiet >/dev/null 2>&1; then
+    doctor_fail 'Compose configuration is invalid. Check the private .env and Compose files.'; config_ok=false
+  elif [[ $config_ok == true ]]; then doctor_ok 'Managed configuration (secret values hidden)'; fi
+  if ! doctor_docker version >/dev/null 2>&1; then
+    doctor_fail 'Local Docker daemon is unavailable. Check the Docker service.'; daemon_ok=false
+  else doctor_ok 'Local Docker daemon'; fi
+  if [[ $config_ok == true && $daemon_ok == true ]]; then
+    if rows=$(doctor_compose ps --all --format json 2>/dev/null) &&
+      printf '%s' "$rows" | jq -es 'if length == 1 and (.[0] | type) == "array" then .[0] else . end' > "$stage/doctor-containers.json" 2>/dev/null; then
+      for service in rustfs zugoid gateway; do
+        if jq -e --arg service "$service" 'any(.[]; .Service == $service and .State == "running" and (if $service == "gateway" then ((.Health // "") == "" or .Health == "healthy") else .Health == "healthy" end))' "$stage/doctor-containers.json" >/dev/null 2>&1; then
+          doctor_ok "$service container"
+        else doctor_fail "$service is missing, stopped or unhealthy. Inspect with zugoid logs."; fi
+      done
+    else doctor_fail 'Cannot read container status.'; fi
+    if doctor_compose exec -T zugoid /usr/local/bin/zugoid-healthcheck >/dev/null 2>&1; then
+      doctor_ok 'Server database and migrations (an unclaimed Owner is allowed)'
+    else doctor_fail 'Server readiness failed. Check migrations and RustFS with zugoid logs.'; fi
+  fi
+  if [[ $config_ok == true ]]; then
+    if origins=$(domain_origins 2>/dev/null); then
+      while IFS= read -r origin; do
+        # Reject userinfo, paths and shell/control characters before showing an address.
+        if [[ ! $origin =~ ^https?://[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]+)?$ ]]; then
+          doctor_fail 'Invalid public origin. Use zugoid domain to manage addresses.'; continue
+        fi
+        code=0
+        curl --silent --fail --proto '=http,https' --connect-timeout 3 --max-time 8 --max-filesize 1048576 "$origin/.well-known/zugoid" -o "$stage/doctor-discovery.json" 2>/dev/null || code=$?
+        if [[ $code != 0 ]]; then
+          case "$code" in
+            6) doctor_fail "$origin: DNS lookup failed." ;;
+            7) doctor_fail "$origin: connection refused or unreachable. Check ports and the firewall." ;;
+            28) doctor_fail "$origin: request timed out. Check DNS, routing and the gateway." ;;
+            35|51|60) doctor_fail "$origin: TLS verification failed. Check the domain and Caddy certificates." ;;
+            *) doctor_fail "$origin: discovery request failed. Check the gateway and Server logs." ;;
+          esac
+        elif jq -e --arg id "$server_id" --arg version "$version" --arg origin "$origin" '.product == "zugoid" and .kind == "server" and .id == $id and .version == $version and (.origin == $origin or ((.aliases // []) | index($origin)) != null)' "$stage/doctor-discovery.json" >/dev/null 2>&1; then
+          doctor_ok "$origin: discovery, UUID and installed version"
+          if [[ $origin == https://* ]]; then doctor_ok "$origin: DNS/connection and TLS verified from this host"
+          else printf 'WARN %s: HTTP only; TLS was not checked.\n' "$origin"; fi
+        else doctor_fail "$origin: discovery does not match this Server UUID, version or address."; fi
+      done <<< "$origins"
+    else doctor_fail 'Cannot read public addresses from .env.'; fi
+  fi
+  if [[ $doctor_failed == 0 ]]; then say 'Doctor passed. External reachability and off-host recovery still need operator verification.'
+  else say 'Doctor found problems. No services or configuration were changed.'; fi
+  return "$doctor_failed"
+}
+
+main() {
+  set -Eeuo pipefail
+  umask 077
+  pinned_version='@@VERSION@@' pinned_commit='@@COMMIT@@' runtime_sha='@@RUNTIME_SHA256@@'
+  asset_pins='@@ASSET_PINS@@'
+  # State outlives main so EXIT can restart a stack if backup was interrupted.
+  dir=${ZUGOID_DIR:-/opt/zugoid} project='' version='' os='' codename='' base='' stage='' restart_needed=false backup_result=''
+  channel=${ZUGOID_CHANNEL:-stable} backup_dir=${ZUGOID_BACKUP_DIR:-} command=${1:-}
+  local option
+  [[ $channel == stable || $channel == prerelease ]] || fail 'ZUGOID_CHANNEL must be stable or prerelease'
+  [[ $pinned_version =~ ^[0-9] ]] || fail 'Source template is not executable; use install.sh from a published release.'
+  [[ $EUID == 0 ]] || fail 'Run as root.'
+  validate_dir
+  if [[ -z $backup_dir ]]; then backup_dir="/var/backups/zugoid/$(printf '%s' "$dir" | sha256sum | cut -c1-12)"; fi
+  [[ $backup_dir =~ ^/[a-zA-Z0-9_./-]+$ && $(realpath -m "$backup_dir") == "$backup_dir" && $backup_dir != "$dir" && $backup_dir != "$dir/"* ]] || fail 'Backups must be a canonical directory outside the installation directory.'
+  stage=$(mktemp -d /var/tmp/zugoid-install.XXXXXXXX)
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  if [[ -z $command ]]; then
+    if [[ $(basename "$0") == zugoid ]]; then command=status; else command=install; fi
+  else shift; fi
+  case "$command" in
+    install) install_server ;;
+    doctor) [[ $# == 0 ]] || fail 'Usage: zugoid doctor'; doctor_server ;;
+    apply-upgrade) apply_upgrade ;;
+    restore) [[ $# == 1 ]] || fail 'Usage: ZUGOID_DIR=/opt/zugoid zugoid restore <backup>'; restore_server "$1" ;;
+    *)
+      for option in docker jq curl flock; do need "$option"; done
+      load_installation
+      case "$command" in status|logs) ;; *) lock_installation ;; esac
+      case "$command" in
+        status) compose ps; say "Version $version; $(get_env PUBLIC_ORIGIN)" ;;
+        logs) compose logs --tail 100 --follow ;;
+        start) compose_up; health "$version" ;;
+        stop) compose stop ;;
+        backup) backup_stack ;;
+        upgrade) upgrade_server "${1:-}" ;;
+        domain) domain_command "$@" ;;
+        compute|factory) factory_command "$@" ;;
+        uninstall) uninstall_server "$@" ;;
+        *) fail 'Usage: zugoid doctor|status|logs|start|stop|backup|restore <file>|upgrade [version]|domain list|add <hostname>|remove <hostname>|primary <hostname>|uninstall [--purge] [--yes] [--no-backup]' ;;
+      esac
+      ;;
+  esac
+}
+main "$@"

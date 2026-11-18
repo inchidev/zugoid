@@ -1,0 +1,176 @@
+import { z } from 'zod'
+import { factorySha } from '../../shared/software-factory'
+import type { RunEnvironment } from '../../shared/code-environments'
+import type { ZugoidEnv } from '../../workers/env'
+import { factoryAuthority, taskBox } from './factory-authority'
+import { repositoryClient } from './git-provider'
+import { giteaBranchHead } from './gitea-proposal'
+import { giteaFactoryFeedback, giteaPublishedPull } from './factory-gitea'
+import { gitlabBranchHead } from './gitlab-proposal'
+import { gitlabFactoryFeedback, gitlabFastForwarded, gitlabPublishedPull } from './factory-gitlab'
+import { artifactsFastForwarded, artifactsFeedback, artifactsHead } from './factory-artifacts'
+import { fail } from './cf'
+
+const pullSchema = z.object({ number: z.number().int().positive(), state: z.string(), merged: z.boolean().optional(), draft: z.boolean().optional(), html_url: z.string().optional(), node_id: z.string().optional(),
+  mergeable_state: z.string().optional(), head: z.object({ sha: factorySha, ref: z.string(), repo: z.object({ id: z.number() }) }), base: z.object({ ref: z.string(), repo: z.object({ id: z.number() }) }) })
+/** The Task's pull request: its number, the approved head and branch, and once merged from Zugoid, the merge. */
+/** `pushedAt` is when the Server confirmed the push of `commit`: the provider has had the head since then. */
+export type PullReceipt = { number: number; commit: string; branch: string; url: string; pushedAt?: string; merged?: { sha: string | null; method: string; at: string; by: 'person' | 'agent' } }
+const branchPath = (branch: string) => branch.split('/').map(encodeURIComponent).join('/')
+const notFound = (error: unknown) => Boolean(error && typeof error === 'object' && 'statusCode' in error && error.statusCode === 404)
+
+/** Where a box's branch is in the original repository now, or null before its first push. */
+export async function publishedHead(env: ZugoidEnv, item: RunEnvironment, branch: string, ensure: () => Promise<void>) {
+  if (item.provider === 'artifacts') { await ensure(); return artifactsHead(env, item.sourceRepo, branch) }
+  const client = await repositoryClient(env, item, 'source', 'read', ensure)
+  if (item.provider === 'gitea') return giteaBranchHead(client, item.sourceRepo, branch)
+  if (item.provider === 'gitlab') return gitlabBranchHead(client, item.sourceRepo, branch)
+  try { return z.object({ object: z.object({ sha: factorySha }) }).parse(await client.json(`/repos/${item.sourceRepo}/git/ref/heads/${branchPath(branch)}`)).object.sha }
+  catch (error) { if (notFound(error)) return null; throw error }
+}
+
+/**
+ * Whether `sha` descends from `old`, as the provider sees it after a push: a direct push must have been a
+ * fast-forward. GitHub's compare says so, as GitLab's merge base does; Gitea's does not tell a fork from a line,
+ * so there the pushing component's own ancestry check, made before the push, is what holds.
+ */
+export async function fastForwarded(env: ZugoidEnv, item: RunEnvironment, old: string, sha: string, ensure: () => Promise<void>) {
+  if (old === sha) return true
+  if (item.provider === 'gitea') return true
+  if (item.provider === 'artifacts') { await ensure(); return artifactsFastForwarded(env, item.sourceRepo, old, sha) }
+  const client = await repositoryClient(env, item, 'source', 'read', ensure)
+  if (item.provider === 'gitlab') return gitlabFastForwarded(client, item.sourceRepo, old, sha)
+  const compare = z.object({ status: z.string(), merge_base_commit: z.object({ sha: factorySha }) }).parse(await client.json(`/repos/${item.sourceRepo}/compare/${old}...${sha}`))
+  return compare.status === 'ahead' && compare.merge_base_commit.sha === old
+}
+
+/**
+ * After a push the Server reads the branch back: it must be at exactly the approved commit. Only then is the
+ * Task's one draft pull request opened, or the earlier one updated. Nothing here writes Git content.
+ */
+export async function publishedPull(env: ZugoidEnv, item: RunEnvironment, input: { branch: string; sha: string; prior: PullReceipt | null; title: string; description: string; ensure: () => Promise<void> }) {
+  const { branch, sha, prior, ensure } = input
+  if (await publishedHead(env, item, branch, ensure) !== sha) fail(409, 'factory_head_changed', 'The branch is not at the approved commit after the push')
+  if (item.provider === 'artifacts') fail(409, 'artifacts_no_api', 'A repository in Zugoid has no pull requests; its receipt is made by artifactsPublished')
+  if (item.provider === 'gitea') return giteaPublishedPull(env, item, input)
+  if (item.provider === 'gitlab') return gitlabPublishedPull(env, item, input)
+  const root = `/repos/${item.sourceRepo}`
+  const pulls = await repositoryClient(env, item, 'source', 'pull_request', ensure)
+  const validatePull = (raw: unknown) => {
+    const pull = pullSchema.parse(raw)
+    if (pull.head.ref !== branch || pull.head.repo.id !== item.sourceRepoId || pull.base.repo.id !== item.sourceRepoId || pull.base.ref !== item.baseBranch || pull.state !== 'open' || pull.merged) fail(409, 'factory_pr_changed', 'The canonical PR identity or state changed')
+    return pull
+  }
+  let pull
+  if (prior) pull = validatePull(await pulls.json(`${root}/pulls/${prior.number}`))
+  else {
+    const matches = z.array(pullSchema).parse(await pulls.json(`${root}/pulls?${new URLSearchParams({ state: 'all', head: `${item.sourceRepo.split('/')[0]}:${branch}`, base: item.baseBranch, per_page: '100' })}`))
+    pull = matches.length ? validatePull(matches[0]) : validatePull(await pulls.json(`${root}/pulls`, 'POST', { title: input.title, body: input.description, head: branch, base: item.baseBranch, draft: true, maintainer_can_modify: false }))
+  }
+  if (pull.head.sha !== sha) fail(409, 'factory_head_changed', 'PR head differs from the approved commit')
+  await pulls.json(`${root}/pulls/${pull.number}`, 'PATCH', { title: input.title, body: input.description })
+  await ensure()
+  return { number: pull.number, commit: sha, branch, url: `https://github.com/${item.sourceRepo}/pull/${pull.number}` } satisfies PullReceipt
+}
+
+const safeUrl = (value: string | null | undefined) => {
+  try { const url = new URL(value ?? ''); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null } catch { return null }
+}
+const state = (status: string, conclusion?: string | null) => status !== 'completed' ? (['queued','requested','waiting','pending'].includes(status) ? 'queued' : 'running')
+  : conclusion === 'success' ? 'success' : ['skipped','neutral'].includes(conclusion ?? '') ? 'skipped' : ['failure','cancelled','timed_out','action_required','startup_failure','stale'].includes(conclusion ?? '') ? 'failure' : 'unknown'
+/** The preview people should open: a finished deployment first, then any with an HTTPS address. */
+export function previewLink(previews: Array<{ state: string; url: string | null }>) {
+  const usable = previews.filter(preview => preview.url?.startsWith('https://'))
+  return (usable.find(preview => ['success', 'active'].includes(preview.state)) ?? usable[0])?.url ?? null
+}
+export async function factoryFeedback(env: ZugoidEnv, runId: string, jobId?: number, actorId?: string) {
+  const context = await factoryAuthority(env, runId, actorId, false, Boolean(actorId)), box = await taskBox(env, context)
+  if (!box?.pullJson) return { state: 'absent', reason: box?.pushedSha ? `No pull request: this Project’s Git flow pushes straight to the base branch, last at ${box.pushedSha}.` : 'No canonical PR has been published for this Task' }
+  const receipt = JSON.parse(box.pullJson) as PullReceipt
+  const feedback = await pullFeedback(env, context.environment, receipt, jobId, async () => { await factoryAuthority(env, runId, actorId, false, Boolean(actorId)) })
+  // A merged pull request keeps its state on the board.
+  if (!receipt.merged) await env.DB.prepare('UPDATE tasks SET factory_state=?,preview_url=? WHERE id=? AND assignee_id=?').bind('ci_' + feedback.state, previewLink(feedback.previews), context.run.taskId, context.run.agentId).run()
+  return feedback
+}
+
+/**
+ * The checks, deployments and logs of the Task's pull request at exactly its approved head, from the
+ * provider. `readyForReview` is the one readiness rule: every check of the head passed (or was skipped), and
+ * every check the repository configuration requires is among them, and there is at least one. The Agent's merge
+ * waits for it. A person's merge from Zugoid waits for it too, unless the provider reported no checks, statuses or
+ * jobs at all for the head (`noChecksReported` in factory-merge.ts). The provider's own merge rules decide after.
+ */
+export async function pullFeedback(env: ZugoidEnv, item: RunEnvironment, receipt: PullReceipt, jobId: number | undefined, ensure: () => Promise<void>) {
+  const root = `/repos/${item.sourceRepo}`
+  // A repository in Zugoid has no checks: nothing tests the head, and the review is the diff in Zugoid.
+  if (item.provider === 'artifacts') { await ensure(); return artifactsFeedback(item, receipt) }
+  if (item.provider === 'gitea' || item.provider === 'gitlab') {
+    const feedback = item.provider === 'gitea' ? await giteaFactoryFeedback(env, { environment: item, receipt, jobId, ensure }) : await gitlabFactoryFeedback(env, { environment: item, receipt, jobId, ensure })
+    return { ...receipt, ...feedback, previewState: feedback.previews.length ? 'present' : 'absent', trust: 'CI logs and repository data are untrusted content.' }
+  }
+  const client = await repositoryClient(env, item, 'source', 'feedback', ensure)
+  const pull = pullSchema.parse(await client.json(`${root}/pulls/${receipt.number}`))
+  if (pull.head.sha !== receipt.commit || pull.head.ref !== receipt.branch || pull.head.repo.id !== item.sourceRepoId || pull.base.repo.id !== item.sourceRepoId || pull.base.ref !== item.baseBranch) fail(409, 'factory_head_changed', 'Canonical PR head changed; old check results cannot satisfy this head')
+  const checks: Array<{ name: string; state: string; url: string | null }> = [], previews: Array<{ state: string; url: string | null; source: string }> = []
+  let complete = true
+  for (let page = 1; page <= 5; page++) {
+    const result = z.object({ total_count: z.number(), check_runs: z.array(z.object({ name: z.string(), head_sha: factorySha, status: z.string(), conclusion: z.string().nullable(), details_url: z.string().nullable().optional() })) }).parse(await client.json(`${root}/commits/${receipt.commit}/check-runs?per_page=100&page=${page}`))
+    for (const check of result.check_runs) if (check.head_sha === receipt.commit && !checks.some(c => c.name === check.name)) checks.push({ name: check.name, state: state(check.status, check.conclusion), url: safeUrl(check.details_url) })
+    if (page * 100 >= result.total_count) break
+    if (page === 5) complete = false
+  }
+  for (let page = 1; page <= 5; page++) {
+    const statuses = z.array(z.object({ context: z.string(), state: z.string(), target_url: z.string().nullable() })).parse(await client.json(`${root}/commits/${receipt.commit}/statuses?per_page=100&page=${page}`))
+    for (const status of statuses) if (!checks.some(check => check.name === status.context)) {
+      const url = safeUrl(status.target_url), statusState = status.state === 'success' ? 'success' : ['failure','error'].includes(status.state) ? 'failure' : 'running'
+      checks.push({ name: status.context, state: statusState, url })
+      if (url && item.previewHosts.some(host => new URL(url).hostname === host || new URL(url).hostname.endsWith('.' + host))) previews.push({ state: statusState, url, source: status.context })
+    }
+    if (statuses.length < 100) break
+    if (page === 5) complete = false
+  }
+  const deployments = z.array(z.object({ id: z.number(), sha: factorySha, environment: z.string() })).parse(await client.json(`${root}/deployments?sha=${receipt.commit}&per_page=100`))
+  if (deployments.length === 100) complete = false
+  for (const deployment of deployments.slice(0, 10)) if (deployment.sha === receipt.commit) {
+    const statuses = z.array(z.object({ state: z.string(), environment_url: z.string().nullable().optional() })).parse(await client.json(`${root}/deployments/${deployment.id}/statuses?per_page=1`))
+    const latest = statuses[0]
+    previews.push({ state: latest?.state ?? 'absent', url: safeUrl(latest?.environment_url), source: deployment.environment })
+  }
+  const runs = z.object({ total_count: z.number(), workflow_runs: z.array(z.object({ id: z.number(), head_sha: factorySha })) }).parse(await client.json(`${root}/actions/runs?head_sha=${receipt.commit}&per_page=100`))
+  if (runs.total_count > 100) complete = false
+  const jobs: Array<{ id: number; name: string; state: string; url: string | null }> = []
+  for (const run of runs.workflow_runs.slice(0, 10)) if (run.head_sha === receipt.commit) {
+    const result = z.object({ total_count: z.number(), jobs: z.array(z.object({ id: z.number(), name: z.string(), head_sha: factorySha, status: z.string(), conclusion: z.string().nullable(), html_url: z.string().optional() })) }).parse(await client.json(`${root}/actions/runs/${run.id}/jobs?per_page=100`))
+    if (result.total_count > 100) complete = false
+    for (const job of result.jobs) if (job.head_sha === receipt.commit) jobs.push({ id: job.id, name: job.name, state: state(job.status, job.conclusion), url: safeUrl(job.html_url) })
+  }
+  if (runs.workflow_runs.length > 10 || deployments.length > 10) complete = false
+  let log: { jobId: number; content: string; truncated: boolean } | undefined
+  if (jobId) {
+    if (!jobs.some(job => job.id === jobId)) fail(403, 'factory_logs_denied', 'This job is not associated with the exact PR head')
+    const response = await client.raw(`${root}/actions/jobs/${jobId}/logs`)
+    let download = response
+    if ([302,303].includes(response.status)) {
+      const url = new URL(response.headers.get('Location') ?? '')
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash || !(url.hostname.endsWith('.blob.core.windows.net') || url.hostname.endsWith('.githubusercontent.com'))) fail(502, 'factory_logs_unavailable', 'Unexpected GitHub log location')
+      await ensure()
+      download = await fetch(url, { redirect: 'manual', credentials: 'omit', signal: AbortSignal.timeout(15000) })
+    }
+    if (!download.ok) { await download.body?.cancel(); fail(502, 'factory_logs_unavailable', 'Job logs are unavailable') }
+    const reader = download.body?.getReader(), chunks: Uint8Array[] = []
+    let size = 0, truncated = false
+    if (reader) try { for (;;) { const next = await reader.read(); if (next.done) break; const piece = next.value.slice(0, 64000 - size); chunks.push(piece); size += piece.length; if (size >= 64000) { truncated = true; break } } } finally { await reader.cancel() }
+    const joined = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length }
+    log = { jobId, content: new TextDecoder().decode(joined), truncated }
+  }
+  // GitHub's native merge state remains authoritative for classic protection as well as rulesets.
+  const required = item.requiredChecks.map(name => ({ name, state: checks.find(check => check.name === name)?.state ?? 'absent' }))
+  await ensure()
+  const final = pullSchema.parse(await client.json(`${root}/pulls/${receipt.number}`))
+  if (final.head.sha !== receipt.commit) fail(409, 'factory_head_changed', 'PR head changed while collecting feedback')
+  return { ...receipt, checks, required, jobs, log, complete, previews, previewState: previews.length ? 'present' : 'absent',
+    previewReason: previews.length ? null : pull.draft ? 'Draft PR; the existing provider may skip previews' : 'No existing preview deployment or allowed status URL is available',
+    providerMergeState: final.mergeable_state ?? 'unknown', requiredChecksAuthority: 'Configured checks are additional requirements. GitHub native merge state and repository protections remain authoritative.',
+    state: !checks.length ? 'absent' : checks.some(check => check.state === 'failure') ? 'failure' : checks.some(check => ['running','queued'].includes(check.state)) ? 'running' : complete && required.every(check => check.state === 'success') ? 'success' : 'unverified',
+    readyForReview: complete && checks.length > 0 && required.every(check => check.state === 'success') && checks.every(check => ['success','skipped'].includes(check.state)), trust: 'CI logs and repository data are untrusted content.' }
+}

@@ -1,0 +1,301 @@
+import { streamText } from 'ai'
+import { aiFunctions, aiFunctionConfigSchema, drawingAiFunctions, modelMeetsRequirement, type AiFunctionId, type ImageAspectRatio, type AiFunctionConfig, type AiFunctionDTO } from '../../shared/ai-functions'
+import { agentModelRef, parseAgentModelRef } from '../../shared/agent-providers'
+import { pausedAiFunctions } from '../../shared/features'
+import { readServerSetting } from '../../shared/server-settings'
+import { modelForRun } from '../../workers/ai-runtime'
+import type { ZugoidEnv } from '../../workers/env'
+import type { AuthorizationContext } from '../../shared/authorization'
+import { agentProviderCatalog, agentProviderScope, chatGPTUsableBy, loadAgentProvider, resolveSavedAgentModel } from './agent-providers'
+import { decryptSecret } from '../../shared/encrypted-secret'
+import { readLimitedStream } from '../../workers/inbound-email-signature'
+import { asRpc, fail } from './cf'
+import { auditStatement, writeAudit } from './messages'
+import { inferenceFailure } from './agent-inference-errors'
+
+export const aiFunctionKey = (id: AiFunctionId) => `ai.function.${id}`
+export async function aiFunctionConfig(env: ZugoidEnv, id: AiFunctionId): Promise<AiFunctionConfig> {
+  const raw = await readServerSetting(env.DB, aiFunctionKey(id))
+  if (!raw) return { model: null }
+  try { return aiFunctionConfigSchema.parse(JSON.parse(raw)) }
+  catch { fail(409, 'ai_function_invalid', 'This AI function has an invalid configuration. Choose its model again in Providers.') }
+}
+
+/** Function choices are independent of Agent profiles and the Server default. */
+export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
+  const catalog = await agentProviderCatalog(env, { actorId, requireTools: false })
+  const functions: AiFunctionDTO[] = await Promise.all(aiFunctions.filter(definition => !pausedAiFunctions.has(definition.id)).map(async definition => {
+    let config: AiFunctionConfig
+    try { config = await aiFunctionConfig(env, definition.id) }
+    catch { return { ...definition, model: null, available: false, invalid: true } }
+    const selected = parseAgentModelRef(config.model ?? '')
+    const provider = selected && catalog.providers.find(provider => provider.id === selected.provider)
+    const chosen = provider?.models.find(model => model.id === selected!.model)
+    const requires = 'requires' in definition ? definition.requires : undefined
+    const available = Boolean(provider?.configured && provider.enabled && chosen && modelMeetsRequirement(chosen, requires)
+      && (definition.id !== 'web.search' || (provider.kind === 'openrouter' && provider.webSearch))
+      && (!drawingAiFunctions.has(definition.id) || provider.kind === 'openrouter'))
+    return { ...definition, ...config, available, ...(chosen && provider ? { modelLabel: `${provider.name} / ${chosen.label || chosen.id}` } : {}) }
+  }))
+  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: catalog.providers.some(provider => provider.id === parseAgentModelRef(model.value)?.provider && provider.kind === 'openrouter' && provider.webSearch) })) }
+}
+
+export async function saveAiFunction(env: ZugoidEnv, authorization: AuthorizationContext, id: AiFunctionId, config: AiFunctionConfig) {
+  if (!authorization.principal.isOwner) fail(403, 'forbidden', 'Only the owner can assign models to AI functions')
+  if (config.model) {
+    if (!parseAgentModelRef(config.model)) fail(400, 'model_unavailable', 'Choose a named provider connection and model')
+    const catalog = await aiFunctionCatalog(env, authorization.principal.id)
+    if (!catalog.models.some(model => model.value === config.model)) fail(400, 'model_unavailable', 'Choose an available model')
+    const definition = aiFunctions.find(item => item.id === id)!
+    const option = catalog.models.find(model => model.value === config.model)!
+    if ('requires' in definition && !modelMeetsRequirement(option, definition.requires)) fail(400, 'model_capability', `${definition.label} needs a model that ${definition.requires === 'image-output' ? 'outputs images' : definition.requires === 'image-input' ? 'reads images' : 'reads audio'}. Load the provider's models again if it should.`)
+    if (drawingAiFunctions.has(id) && (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parseAgentModelRef(option.value)?.provider)?.kind !== 'openrouter') fail(400, 'model_capability', `${definition.label} currently draw with an OpenRouter image model`)
+    if (id === 'web.search') {
+      const provider = catalog.models.find(model => model.value === config.model)
+      const parsed = parseAgentModelRef(provider!.value)!
+      const connection = (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parsed.provider)
+      if (connection?.kind !== 'openrouter' || !connection.webSearch) fail(400, 'search_unavailable', 'Choose an OpenRouter connection with web search enabled')
+    }
+  }
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO server_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
+      .bind(aiFunctionKey(id), JSON.stringify(config), new Date().toISOString()),
+    await auditStatement(env, { serverId: authorization.serverId, actorId: authorization.principal.id, action: 'ai.function.configure', targetType: 'ai_function', targetId: id, meta: config, authorization }),
+  ])
+}
+
+export async function resolveAiFunction(env: ZugoidEnv, id: AiFunctionId, actorId: string): Promise<string> {
+  const config = await aiFunctionConfig(env, id)
+  const definition = aiFunctions.find(definition => definition.id === id)!
+  if (!config.model) fail(409, 'ai_function_unconfigured', `Choose a model for ${definition.label} in Settings → Agents → Providers`)
+  const selected = parseAgentModelRef(config.model)
+  const provider = selected ? await loadAgentProvider(env, selected.provider) : null
+  if (!selected || !provider?.enabled || !provider.secret || !provider.models.some(model => model.id === selected.model)
+    || (provider.kind === 'chatgpt' && !chatGPTUsableBy(provider, actorId))
+    || (id === 'web.search' && (provider.kind !== 'openrouter' || !provider.webSearch))) {
+    fail(409, 'ai_function_unavailable', `${definition.label} uses an unavailable connection or model. Update its assignment in Providers.`)
+  }
+  return config.model
+}
+
+/** One bounded, tool-free call; models cannot read resources or perform actions. */
+export async function inferAiFunction(env: ZugoidEnv, authorization: AuthorizationContext, id: AiFunctionId, instructions: string, prompt: string): Promise<string> {
+  if (new TextEncoder().encode(prompt).byteLength > 64000) fail(413, 'ai_context_too_large', 'This AI request has too much context. Reduce the number of sources or shorten the request.')
+  const reference = await resolveAiFunction(env, id, authorization.principal.id)
+  const limiter = asRpc<{ take: (limit: number, windowMs: number) => Promise<boolean> }>(env.RATE_LIMIT_DO.getByName(`ai-function:${authorization.principal.id}`))
+  if (!await limiter.take(20, 60_000)) fail(429, 'rate_limited', 'Too many AI requests. Try again in a minute.')
+  const definition = aiFunctions.find(definition => definition.id === id)!
+  let providerFailure: unknown
+  try {
+    const model = await modelForRun(env, reference, '', authorization.principal.id)
+    if (typeof model === 'string') fail(503, 'ai_unavailable', 'The selected named model provider is unavailable')
+    const response = streamText({ model, instructions, prompt, maxOutputTokens: definition.maxOutputTokens,
+      abortSignal: AbortSignal.timeout(30000), maxRetries: 0,
+      onError: ({ error }) => { providerFailure = error },
+    })
+    const text = await response.text
+    if (providerFailure) throw providerFailure
+    if (text.length > 24000) throw new Error('Model output too large')
+    const usage = await response.totalUsage
+    await writeAudit(env, { serverId: authorization.serverId, actorId: authorization.principal.id, action: 'ai.function.call', targetType: 'ai_function', targetId: id, meta: { model: reference, status: 'completed', totalTokens: usage.totalTokens ?? null }, authorization })
+    return text
+  } catch (error) {
+    const message = inferenceFailure(providerFailure ?? error)
+    await writeAudit(env, { serverId: authorization.serverId, actorId: authorization.principal.id, action: 'ai.function.call', targetType: 'ai_function', targetId: id, meta: { model: reference, status: 'failed', error: message }, authorization })
+    fail(502, 'ai_function_failed', message)
+  }
+}
+
+const avatarBrief = [
+  'You draw one profile picture (avatar) for a member or an agent of a Zugoid Server, where a team chats and works.',
+  'Output exactly one square 1:1 image. One subject, centered, filling about 85 percent of the frame, still readable at 24 pixels.',
+  'One flat, solid background colour with no gradient, texture or cast shadow, so it can be cut away. No text, letters, numbers, watermarks, borders or frames, and no logos unless the request asks for one.',
+  'Friendly and characterful rather than corporate. Never depict a real, identifiable person.',
+].join(' ')
+const zugoidStyle = [
+  'Zugoid house style: a playful, toy-like 3D object character with a small simple face (two eyes, an optional small mouth), like a designer vinyl figure.',
+  'Matte materials and soft studio light. A black-and-white palette with at most one muted accent colour, on a solid off-white background.',
+  'The first attached image is the Zugoid logo: echo its blocky, rounded pixel geometry in the character\'s shape, but do not draw the logo itself.',
+].join(' ')
+const dataImage = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/u
+/** The Zugoid logo from the Server's own assets, when the deployment serves them. */
+async function zugoidLogo(env: ZugoidEnv) {
+  try {
+    const response = await env.ASSETS?.fetch(new Request('https://assets.invalid/brand/logo-512.png'))
+    if (!response?.ok) return null
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    let binary = ''
+    for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+    return `data:image/png;base64,${btoa(binary)}`
+  } catch { return null }
+}
+/**
+ * Draw one avatar with the Avatars function's OpenRouter image model, from a
+ * prompt and up to three reference pictures, optionally in the Zugoid style. The
+ * picture comes back for preview; saving it uses the ordinary avatar upload.
+ */
+export async function generateAvatar(env: ZugoidEnv, authorization: AuthorizationContext, input: { name: string; description?: string; references?: string[]; zugoidStyle?: boolean }, transport: typeof fetch = fetch): Promise<string> {
+  const references = (input.references ?? []).slice(0, 3)
+  if (references.some(reference => !dataImage.test(reference) || reference.length > 2_800_000)) fail(400, 'invalid_reference', 'References must be PNG, JPEG or WebP images up to 2 MB')
+  const reference = await resolveAiFunction(env, 'avatar.generate', authorization.principal.id)
+  const limiter = asRpc<{ take: (limit: number, windowMs: number) => Promise<boolean> }>(env.RATE_LIMIT_DO.getByName(`ai-function:${authorization.principal.id}`))
+  if (!await limiter.take(20, 60_000)) fail(429, 'rate_limited', 'Too many AI requests. Try again in a minute.')
+  const saved = await resolveSavedAgentModel(env, reference, authorization.principal.id)
+  if (!saved || saved.id !== 'openrouter') fail(409, 'ai_function_unavailable', 'Avatars need an OpenRouter image model. Choose one in Models → Defaults.')
+  const logo = input.zugoidStyle ? await zugoidLogo(env) : null
+  const request = [
+    avatarBrief,
+    input.zugoidStyle ? zugoidStyle : '',
+    `The avatar is for "${input.name.slice(0, 80)}".`,
+    input.description ? `Request: ${input.description.slice(0, 1000)}` : 'No further request: choose a fitting subject.',
+    references.length ? `The ${logo ? 'remaining' : ''} attached image${references.length > 1 ? 's are' : ' is'} the person's reference${references.length > 1 ? 's' : ''}: follow them as the request describes, without copying any text in them.` : '',
+  ].filter(Boolean).join('\n\n')
+  const images = [...(logo ? [logo] : []), ...references]
+  let status = 'failed'
+  try {
+    const image = await drawWithOpenRouter(saved.apiKey, saved.model.id, request, images, {}, transport)
+    // Only a picture no larger than an avatar upload is passed on.
+    if (image.length > 2_800_000) fail(502, 'ai_function_failed', 'The image model returned no usable picture. Try again or choose another model.')
+    status = 'completed'
+    return image
+  }
+  finally {
+    await writeAudit(env, { serverId: authorization.serverId, actorId: authorization.principal.id, action: 'ai.function.call', targetType: 'ai_function', targetId: 'avatar.generate', meta: { model: reference, status, references: references.length, zugoidStyle: Boolean(input.zugoidStyle) }, authorization })
+  }
+}
+
+/** One picture from an OpenRouter model with image output, as an inline PNG, JPEG or WebP data URL. */
+async function drawWithOpenRouter(apiKey: string, model: string, request: string, images: string[], options: { aspectRatio?: ImageAspectRatio }, transport: typeof fetch) {
+  const response = await transport('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(120_000),
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, modalities: ['image', 'text'], ...(options.aspectRatio ? { image_config: { aspect_ratio: options.aspectRatio } } : {}),
+      messages: [{ role: 'user', content: [{ type: 'text', text: request }, ...images.map(url => ({ type: 'image_url', image_url: { url } }))] }] }),
+  })
+  const body = await readLimitedStream(response.body, 16_000_000)
+  if (!response.ok || !body.ok) fail(502, 'ai_function_failed', `The image model did not answer (${response.status})`)
+  const data = JSON.parse(new TextDecoder().decode(body.bytes)) as { choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }> }
+  const image = data.choices?.[0]?.message?.images?.[0]?.image_url?.url ?? ''
+  if (!dataImage.test(image)) fail(502, 'ai_function_failed', 'The image model returned no usable picture. Try again or choose another model.')
+  return image
+}
+
+/** The largest picture an agent receives: a full-screen PNG fits, a raw camera frame does not. */
+export const AGENT_IMAGE_MAX_BYTES = 8_000_000
+const imageBrief = [
+  'You draw one picture an agent asked for while making something, such as art for a game or an app.',
+  'Follow the request exactly: subject, style, framing and background. Draw no text, letters, watermarks or signatures unless the request asks for them.',
+  'When the request asks for a transparent or plain background, use one flat solid colour that can be cut away, with no shadow on it.',
+  'Never depict a real, identifiable person or another work\'s characters or logos.',
+].join(' ')
+
+/**
+ * Draw one picture an agent asked for, with the Images function's OpenRouter model, or the Avatars model when
+ * Images has none. The picture is paid for by the Server's own provider key, like the agent's model.
+ */
+/** What draws when neither Images nor Avatars has a model: Nano Banana on the Server's OpenRouter connection. */
+export const DEFAULT_IMAGE_MODEL = 'google/gemini-2.5-flash-image'
+/** The first enabled OpenRouter connection with a key, by name, for the default image model. */
+async function openRouterConnection(env: ZugoidEnv): Promise<{ apiKey: string; connectionId: string } | null> {
+  if (!env.AUTH_SECRET) return null
+  const rows = await env.DB.prepare("SELECT key FROM server_settings WHERE key LIKE 'agents.provider.%' AND COALESCE(json_extract(value,'$.kind'),substr(key,17))='openrouter' AND json_extract(value,'$.enabled')=1 AND json_extract(value,'$.secret') IS NOT NULL ORDER BY key LIMIT 1").all<{ key: string }>()
+  const id = rows.results[0]?.key.slice('agents.provider.'.length)
+  const provider = id ? await loadAgentProvider(env, id) : null
+  if (!id || !provider?.secret) return null
+  return { apiKey: await decryptSecret(env.AUTH_SECRET, agentProviderScope(id), provider.secret), connectionId: id }
+}
+
+/**
+ * Draw one picture an agent asked for, with the Images function's OpenRouter model, or the Avatars model when
+ * Images has none, or else Nano Banana on the Server's OpenRouter connection. The picture is paid for by the
+ * Server's own provider key, like the agent's model.
+ */
+export async function generateImage(env: ZugoidEnv, authorization: AuthorizationContext, input: { prompt: string; aspectRatio?: ImageAspectRatio }, transport: typeof fetch = fetch): Promise<{ mediaType: string; bytes: Uint8Array }> {
+  const chosen = (await aiFunctionConfig(env, 'image.generate')).model ? 'image.generate' : (await aiFunctionConfig(env, 'avatar.generate')).model ? 'avatar.generate' : null
+  const id = chosen ?? 'image.generate'
+  let saved: { apiKey: string; model: string }
+  let reference: string
+  if (chosen) {
+    try { reference = await resolveAiFunction(env, chosen, authorization.principal.id) }
+    catch { fail(409, 'ai_function_unavailable', 'The image model is unavailable. Ask the Owner to choose an OpenRouter model that outputs images for Images in Models → Defaults.') }
+    const model = await resolveSavedAgentModel(env, reference, authorization.principal.id)
+    if (!model || model.id !== 'openrouter') fail(409, 'ai_function_unavailable', 'Images need an OpenRouter image model. Choose one in Models → Defaults.')
+    saved = { apiKey: model.apiKey, model: model.model.id }
+  } else {
+    const connection = await openRouterConnection(env)
+    if (!connection) fail(409, 'ai_function_unconfigured', 'No image model is set. Ask the Owner to connect OpenRouter, or to choose a model for Images in Models → Defaults.')
+    saved = { apiKey: connection.apiKey, model: DEFAULT_IMAGE_MODEL }
+    reference = agentModelRef(connection.connectionId, DEFAULT_IMAGE_MODEL)
+  }
+  const limiter = asRpc<{ take: (limit: number, windowMs: number) => Promise<boolean> }>(env.RATE_LIMIT_DO.getByName(`ai-image:${authorization.principal.id}`))
+  if (!await limiter.take(30, 60_000)) fail(429, 'rate_limited', 'Too many pictures at once. Wait a minute and try again.')
+  let status = 'failed'
+  try {
+    const url = await drawWithOpenRouter(saved.apiKey, saved.model, `${imageBrief}\n\nRequest: ${input.prompt.slice(0, 4000)}`, [], { aspectRatio: input.aspectRatio }, transport)
+    const [, mediaType, data] = /^data:(image\/[a-z]+);base64,(.*)$/u.exec(url)!
+    const binary = atob(data!)
+    if (binary.length > AGENT_IMAGE_MAX_BYTES) fail(502, 'ai_function_failed', 'The picture is too large. Ask for a smaller one.')
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+    status = 'completed'
+    return { mediaType: mediaType!, bytes }
+  }
+  finally {
+    await writeAudit(env, { serverId: authorization.serverId, actorId: authorization.principal.id, action: 'ai.function.call', targetType: 'ai_function', targetId: id, meta: { model: reference, status }, authorization })
+  }
+}
+
+/** OpenRouter's input_audio format for a recorded or uploaded voice message. */
+export function openRouterAudioFormat(mediaType: string): string | null {
+  const type = mediaType.split(';')[0]!.trim().toLowerCase()
+  return ({ 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/aac': 'aac', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/aiff': 'aiff', 'audio/webm': 'webm' } as Record<string, string>)[type] ?? null
+}
+
+function base64(bytes: Uint8Array) {
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+  return btoa(binary)
+}
+
+export type MediaText = { text: string } | { status: 'unset' | 'failed' }
+/**
+ * Turn an attachment a chat model cannot take into text with a capable AI
+ * function: an image description or a voice transcript. `unset` means the
+ * function has no model; `failed` means the model could not read this file.
+ */
+export async function mediaAsText(env: ZugoidEnv, id: 'image.describe' | 'audio.transcribe', actorId: string, file: { bytes: Uint8Array; mediaType: string; name: string }, transport: typeof fetch = fetch): Promise<MediaText> {
+  let reference: string
+  try { reference = await resolveAiFunction(env, id, actorId) }
+  catch { return { status: 'unset' } }
+  const definition = aiFunctions.find(item => item.id === id)!
+  const instruction = id === 'image.describe'
+    ? 'Describe this image for someone who cannot see it: what it shows, any visible text verbatim, and details that matter. Plain text, no preamble.'
+    : 'Transcribe this voice message verbatim in its original language. Plain text only.'
+  try {
+    let text: string
+    const saved = id === 'audio.transcribe' ? await resolveSavedAgentModel(env, reference, actorId) : null
+    if (saved?.id === 'openrouter') {
+      // The AI SDK sends only WAV and MP3 audio; OpenRouter chat takes the provider's formats, such as m4a and ogg.
+      const format = openRouterAudioFormat(file.mediaType)
+      if (!format) return { status: 'failed' }
+      const response = await transport('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(60_000),
+        headers: { Authorization: `Bearer ${saved.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: saved.model.id, max_tokens: definition.maxOutputTokens, messages: [{ role: 'user', content: [{ type: 'text', text: instruction }, { type: 'input_audio', input_audio: { data: base64(file.bytes), format } }] }] }),
+      })
+      const body = await readLimitedStream(response.body, 1_000_000)
+      if (!response.ok || !body.ok) return { status: 'failed' }
+      const data = JSON.parse(new TextDecoder().decode(body.bytes)) as { choices?: Array<{ message?: { content?: string | null } }> }
+      text = String(data.choices?.[0]?.message?.content ?? '')
+    }
+    else {
+      const model = await modelForRun(env, reference, '', actorId)
+      if (typeof model === 'string') return { status: 'unset' }
+      const result = streamText({ model, maxOutputTokens: definition.maxOutputTokens, abortSignal: AbortSignal.timeout(60_000), maxRetries: 0,
+        messages: [{ role: 'user', content: [{ type: 'text', text: instruction }, id === 'image.describe' ? { type: 'image', image: file.bytes, mediaType: file.mediaType } : { type: 'file', data: file.bytes, mediaType: file.mediaType, filename: file.name }] }] })
+      text = await result.text
+    }
+    text = text.trim()
+    return text ? { text: text.slice(0, 8000) } : { status: 'failed' }
+  }
+  catch { return { status: 'failed' } }
+}

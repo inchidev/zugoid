@@ -1,0 +1,33 @@
+import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
+
+export function d1(database: DatabaseSync): D1Database {
+  let batches: Promise<unknown> = Promise.resolve()
+  return {
+    prepare(sql: string) {
+      let values: SQLInputValue[] = []
+      const statement = {
+        bind(...next: SQLInputValue[]) { values = next; return statement },
+        async first<T>() { return (database.prepare(sql).get(...values) as T | undefined) ?? null },
+        async all<T>() { return { results: database.prepare(sql).all(...values) as T[] } },
+        async raw() { const query = database.prepare(sql); query.setReturnArrays(true); return query.all(...values) },
+        async run() {
+          const query = database.prepare(sql)
+          if (query.columns().length) return { success: true, results: query.all(...values), meta: { changes: 0 } }
+          return { success: true, meta: query.run(...values) }
+        },
+      }
+      return statement
+    },
+    // D1 runs one batch at a time, so concurrent ones wait their turn instead of nesting a transaction.
+    batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      const turn = batches.then(async () => {
+        database.exec('BEGIN')
+        try { const values = []; for (const statement of statements) values.push(await statement.run()); database.exec('COMMIT'); return values }
+        catch (error) { database.exec('ROLLBACK'); throw error }
+      })
+      batches = turn.catch(() => {})
+      return turn
+    },
+  } as unknown as D1Database
+}
+

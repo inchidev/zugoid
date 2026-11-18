@@ -1,0 +1,175 @@
+import type { ConnectedServer, ServerDiscovery } from '~~/shared/server'
+import { SERVER_API_VERSION, uuidSchema } from '~~/shared/server'
+import { normalizeServerOrigin } from '~~/shared/client-router'
+import { appearanceFromSettings, serverAppearance } from '~~/shared/server-appearance'
+import type { ServerDTO } from '~~/shared/types'
+import { saveDiscovery } from '~/utils/boot-cache'
+
+export function useServers() {
+  const servers = useState<ConnectedServer[]>('zugoid-servers', () => [])
+  const active = useState<{ origin: string; serverId: string } | null>(
+    'zugoid-active-server',
+    () => null,
+  )
+  const activeServer = computed(() =>
+    servers.value.find(
+      (s) =>
+        s.origin === active.value?.origin && s.id === active.value.serverId,
+    ),
+  )
+  const activeBase = computed(() => activeServer.value?.origin || null)
+  const scope = computed(
+    () =>
+      `${activeBase.value || ''}/${activeServer.value?.id || ''}/${activeServer.value?.userId || ''}`,
+  )
+  const tokens = useState<Record<string, string>>(
+    'zugoid-server-tokens',
+    () => ({}),
+  )
+  function initialize() {
+    try {
+      const token = sessionStorage.getItem(
+        'zugoid.server-session:' + location.origin,
+      )
+      if (token) tokens.value[location.origin] = token
+    } catch {
+      /* In-memory session fallback. */
+    }
+  }
+  async function request<T>(
+    origin: string,
+    path: string,
+    options: { method?: string; body?: unknown } = {},
+  ): Promise<T> {
+    const normalized = normalizeServerOrigin(origin)
+    if (!path.startsWith('/') || path.startsWith('//'))
+      throw new Error('Invalid Server API path')
+    const response = await fetch(normalized + path, {
+      method: options.method || 'GET',
+      credentials: 'include',
+      signal: AbortSignal.timeout(15000),
+      headers: {
+        Accept: 'application/json',
+        ...(tokens.value[normalized]
+          ? { Authorization: `Bearer ${tokens.value[normalized]}` }
+          : {}),
+        ...(options.body === undefined
+          ? {}
+          : { 'Content-Type': 'application/json' }),
+      },
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
+    })
+    const payload = (await response.json()) as {
+      error?: { message?: string }
+      message?: string
+    }
+    if (!response.ok)
+      throw Object.assign(
+        new Error(
+          payload?.error?.message ||
+            payload?.message ||
+            `Server request failed (${response.status})`,
+        ),
+        { status: response.status },
+      )
+    const token = response.headers.get('set-auth-token')
+    if (token && normalized === location.origin) {
+      tokens.value[normalized] = token
+      try {
+        sessionStorage.setItem('zugoid.server-session:' + normalized, token)
+      } catch {
+        /* Keep it in this Client's memory. */
+      }
+    }
+    return payload as T
+  }
+  async function discover(address: string) {
+    const origin = normalizeServerOrigin(address)
+    const d = await request<ServerDiscovery>(origin, '/.well-known/zugoid')
+    const known = adopt(origin, d)
+    if (origin === normalizeServerOrigin(location.origin)) saveDiscovery(d)
+    return known
+  }
+  /** Checks what a Server said about itself and adds it to the list. */
+  function adopt(address: string, d: ServerDiscovery) {
+    const origin = normalizeServerOrigin(address)
+    const aliases = Array.isArray(d.aliases)
+      ? d.aliases.filter((item): item is string => typeof item === 'string')
+      : []
+    if (
+      d.product !== 'zugoid' ||
+      d.kind !== 'server' ||
+      (d.origin !== origin && !aliases.includes(origin)) ||
+      d.apiVersion !== SERVER_API_VERSION ||
+      !uuidSchema.safeParse(d.id).success
+    )
+      throw new Error('This address is not a compatible Zugoid Server')
+    const sameServer = servers.value.find((s) => s.id === d.id)
+    if (sameServer) {
+      if (sameServer.origin === origin) Object.assign(sameServer, serverAppearance(d, origin))
+      return d
+    }
+    const current = servers.value.find((s) => s.origin === origin)
+    if (current)
+      Object.assign(current, serverAppearance(d, origin))
+    else
+      servers.value.push({ origin, ...serverAppearance(d, origin), version: d.version })
+    return d
+  }
+  function updateAppearance(origin: string, row: ServerDTO) {
+    const current = servers.value.find(item => item.origin === origin && item.id === row.id)
+    if (current) Object.assign(current, appearanceFromSettings(origin, row))
+  }
+  async function refresh(origin: string) {
+    const current = servers.value.find((s) => s.origin === origin)
+    if (!current) return
+    const result = await request<{ user: { id: string } | null }>(
+      origin,
+      '/api/me',
+    )
+    current.userId = result.user?.id
+    return result
+  }
+  function select(origin: string, serverId: string) {
+    if (!servers.value.some((s) => s.origin === origin && s.id === serverId))
+      throw new Error('Server is unavailable')
+    active.value = { origin, serverId }
+  }
+  async function logout(origin: string) {
+    await request(origin, '/api/auth/logout', { method: 'POST' })
+    Reflect.deleteProperty(tokens.value, origin)
+    try {
+      sessionStorage.removeItem('zugoid.server-session:' + origin)
+    } catch {
+      /* Memory is already cleared. */
+    }
+    const s = servers.value.find((s) => s.origin === origin)
+    if (s) s.userId = undefined
+  }
+  function remove(origin: string) {
+    servers.value = servers.value.filter((s) => s.origin !== origin)
+    if (active.value?.origin === origin) active.value = null
+  }
+  function serverUrl(path: string) {
+    return activeBase.value ? new URL(path, activeBase.value).toString() : path
+  }
+  return {
+    servers,
+    active,
+    activeServer,
+    activeBase,
+    scope,
+    tokens,
+    initialize,
+    request,
+    discover,
+    adopt,
+    updateAppearance,
+    refresh,
+    select,
+    logout,
+    remove,
+    serverUrl,
+  }
+}

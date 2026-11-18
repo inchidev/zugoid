@@ -1,0 +1,12 @@
+# VPS exposure only; the services and storage come from docker-compose.yml.
+# Requires Compose >= 2.24.4 for !override.
+services:
+  gateway:
+    environment:
+      ZUGOID_ACME_DIRECTIVE: ${ZUGOID_ACME_EMAIL:+email ${ZUGOID_ACME_EMAIL}}
+    ports: !override
+      - "${ZUGOID_BIND:-0.0.0.0}:${ZUGOID_HTTP_PORT:-80}:80"
+      - "${ZUGOID_BIND:-0.0.0.0}:${ZUGOID_HTTPS_PORT:-443}:443"
+      - "${ZUGOID_BIND:-0.0.0.0}:${ZUGOID_HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile.vps:/etc/caddy/Caddyfile:ro
