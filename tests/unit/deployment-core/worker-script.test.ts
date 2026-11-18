@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { appendWorkerScript, BUNDLED_WORKER_MODULE, loadZugoidRelease, parseWorkerModules, workerMainModule } from '../../../packages/deployment-core/src/index'
+import { MODULE_NAME } from '../../../packages/deployment-core/src/worker-script'
 
 const encoder = new TextEncoder()
 const digest = async (value: Uint8Array) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', value))]
@@ -54,7 +56,19 @@ describe('Worker modules in a release', () => {
       { main: 'index.mjs', modules: [{ name: 'index.mjs', content: '' }, { name: 'index.mjs', content: '' }] },
       { main: 'index.mjs', modules: [{ name: 'other.mjs', content: '' }] },
       { main: 'index.mjs', modules: [{ name: '/etc/index.mjs', content: '' }] },
+      { main: 'index.mjs', modules: [{ name: 'index.mjs', content: '' }, { name: 'chunks/../index.mjs', content: '' }] },
+      { main: 'index.mjs', modules: [{ name: 'index.mjs', content: '' }, { name: './chunks/a.mjs', content: '' }] },
     ]) expect(() => parseWorkerModules(bad)).toThrow()
+  })
+
+  // Nitro puts the routes of /.well-known under a dot segment; 0.2.0 and 0.2.1 shipped such names and the installer refused them.
+  it('accepts the dot segments Nitro writes, such as .well-known', () => {
+    const names = ['index.mjs', 'chunks/routes/.well-known/zugoid.get.mjs', 'chunks/routes/.well-known/oauth-protected-resource/mcp.mjs', 'chunks/routes/api/_...missing_.mjs']
+    expect(parseWorkerModules({ main: 'index.mjs', modules: names.map(name => ({ name, content: '' })) }).modules).toHaveLength(4)
+  })
+
+  it('is the same rule the release build checks', () => {
+    expect(readFileSync('scripts/build-installer-release.mjs', 'utf8')).toContain(`const MODULE_NAME = ${MODULE_NAME}`)
   })
 })
 

@@ -7,7 +7,9 @@ export type WorkerScript = { worker: ArrayBuffer, modules?: WorkerModules }
 /** The bundled script's module name, kept for releases made before modules shipped. */
 export const BUNDLED_WORKER_MODULE = 'zugoid-worker.mjs'
 
-const MODULE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\.(?:mjs|js)$/u
+// A relative path of plain segments. A segment may start with a dot, as Nitro's `chunks/routes/.well-known/` does, but
+// is never `.` or `..`. scripts/build-installer-release.mjs refuses a release whose names this would refuse.
+export const MODULE_NAME = /^(?!\.\.?(?:\/|$))[A-Za-z0-9_.][A-Za-z0-9_.-]*(?:\/(?!\.\.?(?:\/|$))[A-Za-z0-9_.][A-Za-z0-9_.-]*)*\.(?:mjs|js)$/u
 
 /**
  * Nitro's server output as separate ES modules: a new isolate compiles a route's chunk only when that route is asked
