@@ -240,3 +240,15 @@ describe('the Widget look', () => {
     expect(widgetFrameCsp(['https://example.com'])).toContain("font-src 'self'")
   })
 })
+
+describe('the Widget launcher', () => {
+  it('turns into a close button while the chat is open, and Escape closes the chat', async () => {
+    const { widgetFrameHtml, widgetLoaderScript } = await import('../../server/utils/widget-pages')
+    const script = widgetLoaderScript({ serverOrigin: 'https://chat.example.net', publicId: 'abcdefghijklmnop', sites: ['https://example.com'] })
+    expect(script).toContain('class="chat"')
+    expect(script).toContain('class="close"')
+    expect(script).toContain(':host([data-open]) .close{opacity:1')
+    expect(script).toContain("event.key === 'Escape'")
+    expect(widgetFrameHtml({ publicId: 'abcdefghijklmnop', name: 'Zugoid', greeting: '' })).toContain("event.key === 'Escape'")
+  })
+})

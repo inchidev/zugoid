@@ -67,14 +67,22 @@ export function widgetLoaderScript(input: { serverOrigin: string; publicId: stri
       + 'button:hover{transform:translateY(-1px)}'
       + 'button:focus-visible{outline:2px solid currentColor;outline-offset:2px}'
       + css('light')
-      + 'svg{width:22px;height:22px}'
+      + 'button{position:relative}'
+      + 'svg{position:absolute;inset:0;margin:auto;width:22px;height:22px;transition:opacity .16s ease,transform .2s ease}'
+      + '.close{opacity:0;transform:rotate(-90deg) scale(.6)}'
+      + ':host([data-open]) .chat{opacity:0;transform:rotate(90deg) scale(.6)}'
+      + ':host([data-open]) .close{opacity:1;transform:none}'
       + '.badge{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;border-radius:9px;background:#b91c1c;color:#fff;font:600 11px/18px ' + c.look.font + ';text-align:center;padding:0 5px;box-sizing:border-box}'
-      + 'iframe{position:absolute;right:0;bottom:60px;width:min(380px,calc(100vw - 40px));height:min(600px,calc(100vh - 100px));border:1px solid #e5e5e5;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.18);background:#fff;color-scheme:normal}'
+      + 'iframe{position:absolute;right:0;bottom:60px;width:min(380px,calc(100vw - 40px));height:min(600px,calc(100vh - 100px));border:1px solid #e5e5e5;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.18);background:#fff;color-scheme:normal;transform-origin:bottom right;transition:opacity .18s ease,transform .2s ease,visibility 0s linear 0s}'
+      + 'iframe.shut{opacity:0;transform:translateY(8px) scale(.98);visibility:hidden;pointer-events:none;transition:opacity .14s ease,transform .14s ease,visibility 0s linear .14s}'
       + '@media (prefers-color-scheme: dark){' + css('dark') + 'button{border-color:rgba(255,255,255,.12)}iframe{border-color:#262626;background:#000;box-shadow:0 16px 48px rgba(0,0,0,.6)}}'
-      + '@media (prefers-reduced-motion: reduce){button{transition:none}button:hover{transform:none}}'
+      + '@media (prefers-reduced-motion: reduce){button,svg,iframe,iframe.shut{transition:none}button:hover{transform:none}}'
       + '[hidden]{display:none}'
       + '</style>'
-      + '<button type="button" aria-label="Open chat" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/></svg></button>'
+      + '<button type="button" aria-label="Open chat" aria-expanded="false">'
+      + '<svg class="chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/></svg>'
+      + '<svg class="close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+      + '</button>'
       + '<span class="badge" hidden></span>'
     const button = root.querySelector('button')
     const badge = root.querySelector('.badge')
@@ -90,16 +98,24 @@ export function widgetLoaderScript(input: { serverOrigin: string; publicId: stri
         frame.addEventListener('load', tell)
         root.appendChild(frame)
       }
-      if (frame) frame.hidden = !open
+      // The launcher turns into a close button, and the chat fades in from it.
+      if (open) host.setAttribute('data-open', '')
+      else host.removeAttribute('data-open')
+      if (frame) {
+        if (open && !frame.classList.contains('shut')) frame.classList.add('shut')
+        requestAnimationFrame(() => requestAnimationFrame(() => frame.classList.toggle('shut', !open)))
+      }
+      if (open) badge.hidden = true
       button.setAttribute('aria-expanded', String(open))
       button.setAttribute('aria-label', open ? 'Close chat' : 'Open chat')
       tell()
     }
     button.addEventListener('click', () => toggle(!open))
+    document.addEventListener('keydown', (event) => { if (open && event.key === 'Escape') { toggle(false); button.focus() } })
     window.addEventListener('message', (event) => {
       if (event.origin !== c.origin || !frame || event.source !== frame.contentWindow) return
       const data = event.data || {}
-      if (data.type === 'zugoid-widget:close') toggle(false)
+      if (data.type === 'zugoid-widget:close') { toggle(false); button.focus() }
       if (data.type === 'zugoid-widget:unread') {
         const count = Math.max(0, Math.min(99, Number(data.count) || 0))
         badge.hidden = !count || open
@@ -213,6 +229,7 @@ const FRAME_SCRIPT = `(() => {
   })
   document.getElementById('close').hidden = !embedded
   document.getElementById('close').addEventListener('click', () => tellParent({ type: 'zugoid-widget:close' }))
+  document.addEventListener('keydown', (event) => { if (embedded && event.key === 'Escape') tellParent({ type: 'zugoid-widget:close' }) })
   window.addEventListener('message', (event) => {
     if (event.source !== window.parent || !event.data || event.data.type !== 'zugoid-widget:open') return
     open = Boolean(event.data.open)
