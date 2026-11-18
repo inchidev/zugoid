@@ -6,6 +6,17 @@ export type PublishedRelease = {
   notes: string
 }
 
+/** Whether zugoid.com offers this Server new releases (server/utils/update-coverage.ts). */
+export type UpdateCoverageDTO = {
+  covered: boolean
+  /** Free for the first 30 days, a subscription, every Server while nothing is on sale, none, a partner's Server, or zugoid.com could not say. */
+  reason: 'open' | 'free' | 'subscription' | 'none' | 'partner' | 'unknown'
+  freeUntil: string | null
+  /** What Settings shows the Owner when the Server is not covered. */
+  message: string | null
+  subscribeUrl: string | null
+}
+
 export type UpdateStatusDTO = {
   installedVersion: string
   management: 'operator'
@@ -15,6 +26,7 @@ export type UpdateStatusDTO = {
   checkedAt: string
   checkFailed: boolean
   releases?: PublishedRelease[]
+  coverage?: UpdateCoverageDTO
   updateControl?: {
     available: boolean
     configured: boolean

@@ -106,6 +106,10 @@ async function run() {
   catch (error) { toast.add({ title: 'The update did not start', description: errorMessage(error), color: 'error' }) }
   finally { await progressQ.refetch(); busy.value = false }
 }
+// zugoid.com offers new releases while the Server is covered: its first 30 days, then its own subscription.
+const coverage = computed(() => status.value?.coverage ?? null)
+const uncovered = computed(() => coverage.value?.covered === false)
+const freeUntil = computed(() => (coverage.value?.reason === 'free' && coverage.value.freeUntil ? new Date(coverage.value.freeUntil).toLocaleDateString(undefined, { dateStyle: 'medium' }) : ''))
 const needsDownload = computed(() => status.value?.updateControl?.backupDestination === 'download' && !job.value?.backup?.verified)
 </script>
 
@@ -129,6 +133,7 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
             <p class="mt-0.5 text-lg font-medium text-highlighted">Zugoid {{ installed }}</p>
           </div>
           <UBadge v-if="job && active" :label="`Updating to ${job.targetVersion}`" color="primary" variant="subtle" />
+          <UBadge v-else-if="uncovered" label="No subscription" color="warning" variant="subtle" />
           <UBadge v-else-if="choices.length && !status.checkFailed" :label="`${choices[0]!.tagName} available`" color="primary" variant="subtle" />
           <UBadge v-else-if="status.updateControl?.available && !status.checkFailed" label="Up to date" color="success" variant="subtle" />
         </div>
@@ -161,11 +166,19 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
       <template v-if="!status.updateControl?.available">
         <UAlert color="neutral" title="Updates are managed outside Zugoid" :description="status.updateControl?.reason || 'Use your deployment operator to update this Server.'" />
         <p v-if="status.updateAvailable && status.latestRelease" class="text-sm text-muted">Zugoid {{ status.latestRelease.tagName }} is available. <a :href="status.latestRelease.url" target="_blank" rel="noopener noreferrer" class="underline">Release notes</a></p>
+        <p v-else-if="uncovered" class="text-sm text-muted">{{ coverage?.message }} <a v-if="coverage?.subscribeUrl" :href="coverage.subscribeUrl" target="_blank" rel="noopener" class="underline">Subscribe on zugoid.com</a></p>
       </template>
       <template v-else>
         <section class="space-y-4">
           <UCheckbox v-if="!active" v-model="prereleases" label="Include prereleases" :disabled="busy" />
           <UAlert v-if="status.checkFailed" color="warning" title="Could not check GitHub Releases" description="The installed Server is still available. Refresh to retry; saved update progress is shown above." />
+          <UAlert
+            v-else-if="uncovered && !active"
+            color="warning"
+            title="No new release for this Server"
+            :description="coverage?.message || 'This Server has no Zugoid subscription, so zugoid.com offers it no new release. It keeps working as it is.'"
+            :actions="coverage?.subscribeUrl ? [{ label: 'Subscribe on zugoid.com', to: coverage.subscribeUrl, target: '_blank', rel: 'noopener', trailingIcon: 'i-ph-arrow-up-right' }] : []"
+          />
           <template v-else-if="choices.length && !active">
             <UFormField label="Release" description="Only published releases newer than the installed version can be selected.">
               <USelect v-model="selected" class="w-full" :items="choices.map(r => ({ label: r.tagName, value: r.tagName }))" :disabled="active || busy" />
@@ -176,6 +189,7 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
             <p class="text-sm text-muted">{{ status.updateControl?.backupDestination === 'download' ? 'Download a backup of the database and files to your computer before continuing in the installer.' : 'Database and files are saved to the separate backup bucket and verified before the update.' }} Existing Accounts, UUID and storage are kept.</p>
             <UButton label="Back up and update" icon="i-ph-cloud-arrow-up" :loading="busy" :disabled="active || !selectedRelease" @click="start" />
           </template>
+          <p v-if="freeUntil && !active" class="text-sm text-muted">Every Server is free for its first 30 days. This one gets new releases until {{ freeUntil }}; after that a <a v-if="coverage?.subscribeUrl" :href="coverage.subscribeUrl" target="_blank" rel="noopener" class="underline">subscription</a><template v-else>subscription</template> keeps them coming.</p>
           <p v-else-if="!active" class="text-sm text-muted">No newer {{ prereleases ? 'published' : 'stable' }} release is available.</p>
         </section>
       </template>

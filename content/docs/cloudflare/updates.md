@@ -13,7 +13,7 @@ There are two ways an update runs:
 
 ## Start an update
 
-1. In your Server, open **Server settings → Deployment → Updates**. The Deployment entry shows a badge when newer releases exist.
+1. In your Server, open **Server settings → Deployment → Updates**. The Deployment entry shows a badge when newer releases exist. If the Server has no subscription after its first 30 days, the page says so instead and links to subscribing on zugoid.com ([Releases and updates](../concepts/releases-and-updates.md#subscription-and-updates)).
 2. Check **Installed version**.
 3. Choose a **Release**. Only published releases newer than the installed version can be selected. Check **Include prereleases** to also list alpha, beta and rc releases.
 4. Read the release notes shown below the selector.

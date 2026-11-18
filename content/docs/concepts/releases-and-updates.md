@@ -19,6 +19,14 @@ A published release tag and its files are never replaced. Every release includes
 
 If a release turns out to be wrong, the fix comes in a new version.
 
+## Subscription and updates
+
+Every Server is free for its first 30 days. After that, zugoid.com offers it new releases while it has its own subscription; see [Pricing](https://zugoid.com/pricing). A Server without one keeps working with everything in it. Nobody is locked out and nothing turns off; it is just offered no new release.
+
+**Server settings → Deployment → Updates** says which it is: until when a new Server gets releases, or that it has no subscription, with a link to subscribe on zugoid.com. To know this, the Server sends zugoid.com its UUID and nothing else. If zugoid.com cannot be reached, the Server lists releases as usual.
+
+A Server made by a partner's platform gets its releases from that platform.
+
 ## Database changes
 
 Database migrations are only added, never rewritten, and they apply automatically during an update.
