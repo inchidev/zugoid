@@ -1,0 +1,11 @@
+{
+  # Optional contact for the ACME account. Empty: certificates still issue, with no expiry notices.
+  {$ZUGOID_ACME_DIRECTIVE}
+}
+
+{$ZUGOID_SITE_ADDRESS} {
+  # Only Cloudflare's edge may assert CF-Connecting-IP; never forward a client's copy.
+  reverse_proxy zugoid:8080 {
+    header_up -CF-Connecting-IP
+  }
+}

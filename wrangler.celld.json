@@ -1,0 +1,112 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zugoid-celld",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2026-10-16",
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".output/public"
+  },
+  "triggers": {
+    "crons": [
+      "17 4 * * 1"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zugoid",
+      "database_id": "00000000-0000-4000-8000-000000000001",
+      "migrations_dir": "drizzle/server-migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "zugoid-files"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "TICKETS",
+      "id": "00000000000000000000000000000001"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHANNEL_DO",
+        "class_name": "ChannelDurableObject"
+      },
+      {
+        "name": "SERVER_DO",
+        "class_name": "ServerDurableObject"
+      },
+      {
+        "name": "RATE_LIMIT_DO",
+        "class_name": "RateLimitDurableObject"
+      },
+      {
+        "name": "NOTIFICATION_DO",
+        "class_name": "NotificationDurableObject"
+      },
+      {
+        "name": "AGENT_DO",
+        "class_name": "ZugoidAgent"
+      },
+      {
+        "name": "AGENT_RUN_DO",
+        "class_name": "AgentRunDurableObject"
+      },
+      {
+        "name": "AGENT_SCHEDULE_DO",
+        "class_name": "AgentScheduleDurableObject"
+      },
+      {
+        "name": "PORTAL_DO",
+        "class_name": "PortalDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ChannelDurableObject",
+        "ServerDurableObject",
+        "RateLimitDurableObject",
+        "NotificationDurableObject",
+        "ZugoidAgent",
+        "ZugoidThink"
+      ]
+    },
+    {
+      "tag": "v2-agent-runs",
+      "new_sqlite_classes": [
+        "AgentRunDurableObject"
+      ]
+    },
+    {
+      "tag": "v3-agent-schedules",
+      "new_sqlite_classes": [
+        "AgentScheduleDurableObject"
+      ]
+    },
+    {
+      "tag": "v6-lizard-compute",
+      "new_sqlite_classes": ["LizardComputeDurableObject"]
+    },
+    {
+      "tag": "v8-portal",
+      "new_sqlite_classes": ["PortalDurableObject"]
+    }
+  ],
+  "vars": {
+    "PUBLIC_ORIGIN": "http://127.0.0.1:8080",
+    "AUTH_REGISTRATION_MODE": "invite_only",
+    "ZUGOID_RUNTIME": "celld",
+    "AUTH_SECRET": "invalid",
+    "ADMIN_USERNAME": "owner",
+    "SETUP_TOKEN": "invalid"
+  }
+}

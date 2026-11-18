@@ -1,0 +1,5 @@
+services:
+  zugoid:
+    build:
+      context: ..
+      dockerfile: self-host/Dockerfile

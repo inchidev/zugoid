@@ -1,0 +1,160 @@
+# Shared standalone Server. Supply an image, or add compose.build.yml/compose.dev.yml.
+# A project name scopes every network and volume; never use a shared fleet bucket.
+name: ${ZUGOID_PROJECT:-zugoid}
+
+services:
+  # Existing installations used a root-owned volume. Prepare it before the
+  # unprivileged node starts, including after a cold restore.
+  celld-perms:
+    image: alpine:3.24
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - celld-data:/data
+    command: ["chown", "-R", "10001:10001", "/data"]
+
+  rustfs-perms:
+    image: alpine:3.24
+    user: "0:0"
+    restart: "no"
+    volumes:
+      - rustfs-data:/data
+    command:
+      - sh
+      - -c
+      - chown -R 10001:10001 /data
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    restart: always
+    depends_on:
+      rustfs-perms:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in .env}
+      RUSTFS_OBS_LOGGER_LEVEL: error
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  bucket-init:
+    image: amazon/aws-cli:2.39.3
+    restart: "no"
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        aws configure set default.s3.addressing_style path
+        bucket="${RUSTFS_BUCKET:-cells}"
+        endpoint="http://rustfs:9000"
+        region="${AWS_REGION:-us-east-1}"
+        i=0
+        while [ "$$i" -lt 30 ]; do
+          # Bounded calls: a host that drops container forwarding must fail visibly, not hang.
+          if aws s3api head-bucket --bucket "$$bucket" --endpoint-url "$$endpoint" --cli-connect-timeout 5 --cli-read-timeout 10 >/dev/null 2>&1; then
+            exit 0
+          fi
+          if aws s3api create-bucket --bucket "$$bucket" --endpoint-url "$$endpoint" --region "$$region" --cli-connect-timeout 5 --cli-read-timeout 10; then
+            exit 0
+          fi
+          i=$$((i + 1))
+          sleep 2
+        done
+        echo "could not reach or create s3://$$bucket at $$endpoint. If RustFS is healthy, the host may drop traffic between containers (iptables FORWARD DROP); allow the Compose bridge, e.g. in the DOCKER-USER chain." >&2
+        exit 1
+
+  zugoid:
+    image: ${ZUGOID_IMAGE:-zugoid:local}
+    pull_policy: never
+    restart: always
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    stop_grace_period: 50s
+    depends_on:
+      celld-perms:
+        condition: service_completed_successfully
+      bucket-init:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    env_file:
+      - path: ${ZUGOID_ENV_FILE:-.env}
+        required: true
+    environment:
+      # Coolify can inject these. Plain Compose leaves them empty and uses .env.
+      SERVICE_URL_ZUGOID_8080: ${SERVICE_URL_ZUGOID_8080:-}
+      SERVICE_FQDN_ZUGOID_8080: ${SERVICE_FQDN_ZUGOID_8080:-}
+      SERVICE_PASSWORD_64_AUTHSECRET: ${SERVICE_PASSWORD_64_AUTHSECRET:-}
+      SERVICE_PASSWORD_64_SETUPTOKEN: ${SERVICE_PASSWORD_64_SETUPTOKEN:-}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://127.0.0.1:8080}
+      AGENT_CALLBACK_ORIGIN: ${AGENT_CALLBACK_ORIGIN:-http://zugoid:8080}
+      ZUGOID_ORIGINS: ${ZUGOID_ORIGINS:-}
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-owner}
+      SETUP_TOKEN: ${SETUP_TOKEN:?set SETUP_TOKEN in .env}
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in .env}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      S3_ENDPOINT: http://rustfs:9000
+      CELLD_BUCKET: s3://${RUSTFS_BUCKET:-cells}
+      CELLD_WATCH: /var/lib/zugoid/celld
+      CELLD_DURABILITY: bucket
+      CELLD_READY_FLEET_GATE_MS: "0"
+      RUST_LOG: ${RUST_LOG:-warn}
+    volumes:
+      - celld-data:/var/lib/zugoid/celld
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/zugoid-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 240s
+
+  gateway:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on:
+      zugoid:
+        condition: service_healthy
+    environment:
+      ZUGOID_SITE_ADDRESS: ${ZUGOID_SITE_ADDRESS:-http://:80}
+    ports:
+      - "${ZUGOID_BIND:-127.0.0.1}:${ZUGOID_HTTP_PORT:-${ZUGOID_PUBLISH_PORT:-8080}}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  rustfs-data:
+  celld-data:
+  caddy-data:
+  caddy-config:

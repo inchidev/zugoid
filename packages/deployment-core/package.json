@@ -1,0 +1,35 @@
+{
+  "name": "@zugoid/deployment-core",
+  "version": "0.1.1",
+  "description": "Cloudflare server provisioning and updates for Zugoid servers",
+  "type": "module",
+  "license": "BUSL-1.1",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node scripts/clean-dist.mjs",
+    "build": "tsc -p tsconfig.json",
+    "pack:release": "pnpm build && pnpm pack --pack-destination ../../.installer/release",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "cloudflare": "7.1.0",
+    "@noble/hashes": "2.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inchidev/zugoid",
+    "directory": "packages/deployment-core"
+  }
+}

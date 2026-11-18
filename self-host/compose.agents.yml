@@ -1,0 +1,31 @@
+# Optional local Docker execution. Run with the standalone Server's base Compose.
+# Only the trusted Runner receives the Docker socket. Agent containers join the
+# internal network, which has no public internet route.
+services:
+  zugoid:
+    environment:
+      AGENT_RUNNER_URL: http://agent-runner:8081
+      AGENT_RUNNER_TOKEN: ${ZUGOID_RUNNER_TOKEN:?set a separate 32+ character Runner token}
+      AGENT_CALLBACK_ORIGIN: http://zugoid:8080
+      GITHUB_AGENT_APP_ID: ${GITHUB_AGENT_APP_ID:-}
+      GITHUB_AGENT_APP_PRIVATE_KEY: ${GITHUB_AGENT_APP_PRIVATE_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+    networks:
+      default:
+      agents:
+        aliases: [zugoid]
+  agent-runner:
+    image: ${ZUGOID_AGENT_RUNNER_IMAGE:?set the pinned Runner image}
+    restart: unless-stopped
+    environment:
+      ZUGOID_RUNNER_TOKEN: ${ZUGOID_RUNNER_TOKEN:?set ZUGOID_RUNNER_TOKEN}
+      ZUGOID_SERVER_ID: ${ZUGOID_SERVER_ID:?set this Server UUID}
+      ZUGOID_AGENT_NETWORK: ${ZUGOID_PROJECT:-zugoid}-agents
+      ZUGOID_AGENT_IMAGE: ${ZUGOID_AGENT_IMAGE:?set the pinned Pi runtime image}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [agents]
+networks:
+  agents:
+    name: ${ZUGOID_PROJECT:-zugoid}-agents
+    internal: true

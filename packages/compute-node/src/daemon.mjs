@@ -1,0 +1,175 @@
+import { LoopDiskStore } from './disk-store.mjs'
+import { join, resolve } from 'node:path'
+import { runProcess } from './process.mjs'
+import { openNodeState, serverOrigin } from './state-store.mjs'
+import { statfs, mkdir, chmod, chown, writeFile, rename, rm } from 'node:fs/promises'
+import { nodeCapacity } from './capacity.mjs'
+import { createBoxHost } from './boxes.mjs'
+import { createPreviewGate } from './preview-gate.mjs'
+
+const state = resolve(process.env.ZUGOID_NODE_STATE || './compute-node-state')
+const image = process.env.ZUGOID_WORKSPACE_IMAGE
+const configuredDiskBytes = Number(process.env.ZUGOID_WORKSPACE_DISK_BYTES || 10737418240)
+if (![1073741824, 10737418240].includes(configuredDiskBytes)) throw new Error('ZUGOID_WORKSPACE_DISK_BYTES must be 1073741824 or 10737418240')
+if (!/^(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}$/u.test(image ?? '')) throw new Error('Set ZUGOID_WORKSPACE_IMAGE to an immutable registry digest')
+if (process.env.ZUGOID_SHARED_KERNEL_TRUSTED !== '1') throw new Error('Docker shares the host kernel. Confirm trusted-code use with ZUGOID_SHARED_KERNEL_TRUSTED=1; public untrusted tenants require a stronger provider')
+process.umask(0o077)
+const server = serverOrigin(process.env.ZUGOID_SERVER_ORIGIN)
+const store = await openNodeState(state)
+// One hard-quota disk per box, kept while its Task is open; a box stops when idle, its disk does not go.
+const boxDiskRoot = join(state,'box-disks'), diskSizes = [1073741824, 10737418240]
+const boxDisks = bytes => new LoopDiskStore(boxDiskRoot,{bytes,maxDisks:64})
+const sourceDisks = new LoopDiskStore(join(state,'source-disks'),{bytes:536870912,maxDisks:1})
+// One commit copy or checkpoint at a time, for a review, a push or an idle save; it never outlives its use. A machine
+// with little disk (a Zugoid Compute Small box has one 5.4 GB disk beside the box image) sets a smaller one.
+const scratchBytes = Number(process.env.ZUGOID_SCRATCH_DISK_BYTES || 2147483648)
+if (!Number.isInteger(scratchBytes) || scratchBytes < 268435456 || scratchBytes > 2147483648 || scratchBytes % 1048576) throw new Error('ZUGOID_SCRATCH_DISK_BYTES must be whole MiB from 256 MiB to 2 GiB')
+const publishDisks = new LoopDiskStore(join(state,'publish-disks'),{bytes:scratchBytes,maxDisks:1})
+await boxDisks(configuredDiskBytes).initialize(); await sourceDisks.initialize(); await publishDisks.initialize()
+const probe = new LoopDiskStore(join(state,'probe-disks'),{bytes:33554432,maxDisks:1})
+await probe.initialize()
+const probeId = crypto.randomUUID()
+try { await probe.cleanup(); await probe.ensure(probeId,true) } finally { await probe.remove(probeId) }
+// The Server places boxes within this capacity; a Node no longer runs one operation at a time.
+const capabilities = { diskBytes:configuredDiskBytes,docker:true,durableDisk:true,isolation:'shared-kernel',image,capacity:nodeCapacity(),protocol:2 }
+const docker = async (args,options={}) => {
+  const result = await runProcess('docker',args,options)
+  // A helper that failed still answers on stdout; its stderr, which could hold anything, stays here.
+  if (result.code !== 0) throw Object.assign(new Error('Docker operation failed'),{output:result.stdout.toString()})
+  return result.stdout.toString()
+}
+async function request(server,path,body,token,limit=420000) {
+  const response = await fetch(server+path,{method:'POST',redirect:'manual',headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)})
+  if (!response.ok) throw Object.assign(new Error('Server rejected Node operation'),{status:response.status})
+  const chunks=[];let bytes=0
+  for await(const chunk of response.body){bytes+=chunk.length;if(bytes>limit)throw new Error('Server response limit reached');chunks.push(chunk)}
+  return JSON.parse(Buffer.concat(chunks).toString())
+}
+let connection = store.connection(server)
+if (!connection) {
+  const token=process.env.ZUGOID_PAIRING_TOKEN
+  if (!/^[a-f0-9]{64}$/u.test(token??'')) throw new Error('Set a one-use ZUGOID_PAIRING_TOKEN from Server Settings → Repositories → Compute Nodes')
+  const paired=await request(server,'/api/compute-agent/pair',{token,capabilities})
+  store.pair(server,paired)
+  connection=store.connection(server)
+}
+// A turn's submission carries the conversation so far, up to 2 MB.
+const poll=body=>request(server,'/api/compute-agent/poll',body,connection.token,body.operation==='turn'?2600000:420000)
+await docker(['info','--format','{{.ServerVersion}}'])
+await docker(['image','inspect',image])
+// Only this paired Node's containers and networks. A restart never resumes an uncertain turn: the box
+// starts again on the Server's word, and a turn it had begun ends with an error instead of running twice.
+const owned=['--filter',`label=zugoid.node=${connection.nodeId}`,'--filter',`label=zugoid.server=${connection.serverId}`]
+const leftovers=(await docker(['ps','-aq',...owned])).trim().split('\n').filter(Boolean)
+for (const id of leftovers) await docker(['rm','-f',id])
+for (const id of (await docker(['network','ls','-q',...owned])).trim().split('\n').filter(Boolean)) await docker(['network','rm',id]).catch(()=>{})
+await sourceDisks.cleanup(); await publishDisks.cleanup()
+
+async function revokeToken(token) {
+  try { await fetch('https://api.github.com/installation/token',{method:'DELETE',redirect:'manual',headers:{Authorization:`Bearer ${token}`,'User-Agent':'Zugoid-node'},signal:AbortSignal.timeout(10000)}) } catch { /* An expiring single-repository grant is never reused. */ }
+}
+async function revokeSource(job) {
+  if(typeof job.sourceToken!=='string')return
+  const token=job.sourceToken;delete job.sourceToken
+  await revokeToken(token)
+}
+/** A push's review goes to the Server, which keeps it in R2. */
+async function upload(approvalId,body) {
+  const response=await fetch(`${server}/api/compute-agent/review/${approvalId}`,{method:'PUT',redirect:'manual',headers:{'Content-Type':'application/json',Authorization:`Bearer ${connection.token}`},body:JSON.stringify(body),signal:AbortSignal.timeout(60000)})
+  await response.body?.cancel()
+  if(!response.ok)throw Object.assign(new Error('Server rejected the review'),{status:response.status})
+}
+async function sourceBundle(job,signal) {
+  // A Gitea or GitLab source is fetched through the Server with a lease-bound capability; nothing is revoked at GitHub.
+  const brokered=job.source&&typeof job.source.remote==='string'&&new URL(job.source.remote).origin===new URL(server).origin
+  // A GitHub repository is owner/name; one fetched through the Server (Gitea, GitLab with its subgroups, or a repository
+  // in Zugoid on Artifacts, which has no owner) only needs a safe name, since the Server's own address is what is fetched.
+  const repositoryShape=brokered?/^[\w.-]+(?:\/[\w.-]+){0,20}$/u:/^[\w.-]+\/[\w.-]+$/u
+  if (!repositoryShape.test(job.repository) || !/^[a-f0-9]{40}$/u.test(job.baseSha) || (!brokered && typeof job.sourceToken!=='string')) throw new Error('Invalid pinned source grant')
+  const name=`zugoid-fetch-${job.id}`
+  let directory
+  try {
+    directory=await sourceDisks.ensure(job.id,true)
+    const ca=process.env.ZUGOID_SOURCE_CA||process.env.NODE_EXTRA_CA_CERTS
+    const output=await docker(['run','--rm','-i','--name',name,'--label',`zugoid.node=${connection.nodeId}`,'--label',`zugoid.server=${connection.serverId}`,
+      '--network','bridge','--read-only','--user','1000:1000','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','32','--memory','512m','--cpus','1',
+      '--tmpfs','/tmp:rw,noexec,nosuid,size=32m,uid=1000,gid=1000','--mount',`type=bind,src=${directory},dst=/source`,
+      ...(ca?['--mount',`type=bind,src=${resolve(ca)},dst=/run/source-ca.pem,readonly`,'--env','GIT_SSL_CAINFO=/run/source-ca.pem']:[]),image,'node','/opt/zugoid/fetch-source.mjs'],
+      {input:JSON.stringify(brokered?{baseSha:job.baseSha,remote:job.source.remote,authorization:job.source.authorization}:{repository:job.repository,baseSha:job.baseSha,token:job.sourceToken}),signal,timeoutMs:120000,limit:10000})
+    if(!JSON.parse(output).ok)throw new Error('Pinned source broker failed')
+    return {diskId:job.id,directory,bundle:join(directory,'source.bundle')}
+  } catch(error) {
+    await docker(['rm','-f',name]).catch(()=>{})
+    if(directory)await sourceDisks.remove(job.id).catch(()=>{})
+    throw new Error('Source broker fetch or capacity check failed',{cause:error})
+  } finally {
+    await revokeSource(job)
+    delete job.source
+  }
+}
+// The source disk holds one bundle at a time, until the box's checkout has read it.
+let sourceLock=Promise.resolve()
+async function fetchSource(grant) {
+  const previous=sourceLock;let unlock;sourceLock=new Promise(resolveLock=>{unlock=resolveLock})
+  await previous
+  try {
+    const fetched=await sourceBundle(grant)
+    return {bundle:fetched.bundle,release:async()=>{try{await sourceDisks.remove(fetched.diskId)}finally{unlock()}}}
+  } catch(error) { unlock(); throw error }
+}
+const disks={
+  ensure:(id,create,bytes)=>{if(!diskSizes.includes(bytes))throw new Error('Unsupported box disk policy');return boxDisks(bytes).ensure(id,create)},
+  remove:id=>boxDisks(configuredDiskBytes).remove(id),
+  flush:path=>boxDisks(configuredDiskBytes).command('sync',['--file-system',path]),
+}
+const diskFree=async()=>{const stats=await statfs(state);return Math.floor(Number(stats.bavail)*Number(stats.bsize))}
+const scratch={ensure:id=>publishDisks.ensure(id,true),remove:id=>publishDisks.remove(id)}
+// Each box's egress policy, read-only in its proxy, and its authority's certificate, read-only in the box.
+// Neither holds a secret: the values and the authority's key reach the proxy only by docker exec.
+const egressRoot=join(state,'box-egress')
+const egressDirectory=id=>{if(!/^[a-f0-9-]{36}$/u.test(id))throw new Error('Invalid box');return join(egressRoot,id)}
+async function publicFile(path,content){const temporary=`${path}.${crypto.randomUUID()}`;await writeFile(temporary,content,{mode:0o644});await chmod(temporary,0o644);await rename(temporary,path)}
+const egressFiles={
+  async prepare(id){const base=egressDirectory(id),files={policy:join(base,'policy'),ca:join(base,'ca')};for(const path of [base,files.policy,files.ca]){await mkdir(path,{recursive:true});await chmod(path,0o755)}return files},
+  writePolicy:(id,policy)=>publicFile(join(egressDirectory(id),'policy','policy.json'),JSON.stringify(policy)),
+  async writeCa(id,cert,bundle){await publicFile(join(egressDirectory(id),'ca','ca.pem'),cert);await publicFile(join(egressDirectory(id),'ca','bundle.pem'),bundle)},
+  remove:id=>rm(egressDirectory(id),{recursive:true,force:true}),
+}
+// The preview gate, only where a provider exposes its port (Zugoid Compute sets ZUGOID_BOX_PREVIEW_PORT): a person the
+// Server let in watches a box's screen. The viewers' directories hold the box's X socket and voxl's socket.
+const previewPort=process.env.ZUGOID_BOX_PREVIEW_PORT?Number(process.env.ZUGOID_BOX_PREVIEW_PORT):null
+if(previewPort!==null&&!(Number.isInteger(previewPort)&&previewPort>=1024&&previewPort<=65535))throw new Error('ZUGOID_BOX_PREVIEW_PORT must be a port from 1024 to 65535')
+const previewOrigins=[server,...(process.env.ZUGOID_BOX_PREVIEW_ORIGINS??'').split(',').map(origin=>origin.trim()).filter(Boolean)]
+for(const origin of previewOrigins)if(new URL(origin).origin!==origin||!/^https?:$/u.test(new URL(origin).protocol))throw new Error('ZUGOID_BOX_PREVIEW_ORIGINS lists origins such as https://example.com')
+const viewRoot=join(state,'box-view')
+const viewDirectory=id=>{if(!/^[a-f0-9-]{36}$/u.test(id))throw new Error('Invalid box');return join(viewRoot,id)}
+const viewFiles={
+  async prepare(id){const base=viewDirectory(id),files={x11:join(base,'x11'),socket:join(base,'socket')};await mkdir(base,{recursive:true});await chmod(base,0o755)
+    for(const path of [files.x11,files.socket]){await mkdir(path,{recursive:true});await chown(path,1000,1000);await chmod(path,0o700)}return files},
+  remove:id=>rm(viewDirectory(id),{recursive:true,force:true}),
+}
+const preview=previewPort===null?null:{files:viewFiles,origins:[...new Set(previewOrigins)]}
+const host=createBoxHost({docker,poll,disks,fetchSource,records:store.boxes,connection,image,server,capacity:capabilities.capacity,diskFree,scratch,upload,egressFiles,preview,revoke:revokeToken,
+  log:(event,detail)=>console.warn(event,detail)})
+const gate=preview?createPreviewGate({viewers:host.viewers,origins:preview.origins,log:(event,detail)=>console.warn(event,detail)}):null
+if(gate)await gate.listen(previewPort)
+// A box disk without a record, from a lost state file, is reported until the Server says what it is.
+for (const name of (await docker(['volume','ls','-q',...owned])).trim().split('\n').filter(Boolean)) {
+  // The per-command Factory before protocol 2 left a volume per workspace. Its Server dropped those
+  // workspaces; the bind entry goes, and its disk image stays until the operator releases it.
+  if (/^zugoid-ws-[a-f0-9-]{36}$/u.test(name)) { await docker(['volume','rm',name]).catch(()=>{}); continue }
+  const match=/^zugoid-disk-([a-f0-9-]{36})$/u.exec(name)
+  if (!match) continue
+  try { host.adopt(match[1],JSON.parse(await docker(['volume','inspect',name]))[0]?.Labels?.['zugoid.task']) } catch { /* Not a box disk. */ }
+}
+let stopping=false,wake
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{stopping=true;wake?.()})
+// Each sync renews every box's lease for a minute; the Server hands out turns in its answers.
+while(!stopping){
+  try { await host.sync() }
+  catch(error) { if(error.status===403){console.warn('compute.connection_revoked');break} }
+  await new Promise(resolveWait=>{wake=resolveWait;setTimeout(resolveWait,2000)})
+}
+await host.shutdown()
+await gate?.close()
+store.close()

@@ -1,0 +1,22 @@
+---
+title: Zugoid documentation
+description: Run your own Zugoid Server on Cloudflare or a VPS, bring your team and its AI agents into it, and connect MCP clients.
+---
+
+Zugoid is a open-source workspace where people and AI Agents share channels, Projects and Tasks. Today each Server runs on its operator's own Cloudflare account or VPS and owns its Accounts, Members, Roles, content and files.
+
+New here? Start with [What is Zugoid](get-started/what-is-zugoid.md), then [choose how to run it](get-started/choose-how-to-run.md).
+
+## Docs for agents
+
+These docs are written to be read by AI agents as well as people:
+
+- Every page is available as Markdown: add `.md` to its address, or request it with `Accept: text/markdown`.
+- [llms.txt](https://zugoid.com/llms.txt) describes Zugoid and links the main pages; [docs/llms.txt](https://zugoid.com/docs/llms.txt) indexes every page and [docs/llms-full.txt](https://zugoid.com/docs/llms-full.txt) holds them all in one file.
+- **Copy page** at the top of each page copies its Markdown, and its menu opens the page in Claude or ChatGPT.
+
+To let an agent work *inside* your Server rather than read about it, connect it with [MCP](agents/mcp.md) or add it as an [external agent](agents/external-agents.md).
+
+## Help and feedback
+
+Found a mistake or something missing? Open an issue on [GitHub](https://github.com/inchidev/zugoid/issues), or use **Edit on GitHub** in a page's menu.
