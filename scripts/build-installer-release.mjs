@@ -69,6 +69,10 @@ for (const file of await filesUnder(serverDir)) {
   workerModules.push({ name: relative(serverDir, file).split(sep).join('/'), content: await readFile(file, 'utf8') })
 }
 if (!workerModules.some(module => module.name === 'index.mjs')) throw new Error('Nitro server output has no index.mjs')
+// The installer's own rule (MODULE_NAME in packages/deployment-core/src/worker-script.ts): a release it would refuse never ships.
+const MODULE_NAME = /^(?!\.\.?(?:\/|$))[A-Za-z0-9_.][A-Za-z0-9_.-]*(?:\/(?!\.\.?(?:\/|$))[A-Za-z0-9_.][A-Za-z0-9_.-]*)*\.(?:mjs|js)$/u
+const refused = workerModules.filter(module => !MODULE_NAME.test(module.name)).map(module => module.name)
+if (refused.length) throw new Error(`Worker module names the installer refuses: ${refused.join(', ')}`)
 const workerModulesName = 'zugoid-worker-modules.json'
 const workerModulesPayload = Buffer.from(JSON.stringify({ main: 'index.mjs', modules: workerModules }))
 await writeFile(join(outputDir, workerModulesName), workerModulesPayload)
