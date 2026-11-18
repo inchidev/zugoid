@@ -2,6 +2,10 @@
 
 A Cloudflare Server can be updated from **Settings → Deployment → Updates** without Git, GitHub or Workers Builds. The Owner chooses a newer published release and selects **Back up and update**. Stable releases are shown by default; **Include prereleases** explicitly includes named alpha/beta/rc releases. Only releases newer than the running version are selectable, so moving from a named alpha to a newer stable release is supported.
 
+## Coverage
+
+zugoid.com offers a Server new releases only while it covers it: its first 30 days, then its own subscription (AGENTS.md). `server/utils/update-coverage.ts` asks `GET https://zugoid.com/api/servers/<uuid>/coverage`, sending only the Server's UUID. The Updates status carries the answer as `coverage`; when the Server is not covered, `updateAvailable` is false, Settings shows zugoid.com's sentence and a subscribe link (with `&origin=` so checkout can add the Server to the account), and a new update request answers 402 `update_not_covered`. The installer at zugoid.com refuses the same Server. When zugoid.com does not answer, or answers something unreadable, nothing is held back. A partner's Server (`PARTNER_SIGNIN_KEY`) is not asked: its platform delivers its releases. The VPS CLI and Docker images do not ask yet; there the license is the lever.
+
 ## The request stays local
 
 1. The Server authenticates its own Owner, then validates the selected published release against GitHub Releases.

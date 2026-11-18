@@ -5,6 +5,7 @@ import { serverVersion } from '../../../../utils/version'
 import { updateConfiguration, updateOwner, serverUpdateLaunchUrl } from '../../../../utils/server-updates'
 import { fail } from '../../../../utils/cf'
 import { zugoidReleases } from '../../../../utils/releases'
+import { updateCoverage } from '../../../../utils/update-coverage'
 import { parseBody } from '../../../../utils/validate'
 import { writeAudit } from '../../../../utils/messages'
 
@@ -18,6 +19,8 @@ export default defineEventHandler(async (event) => {
   }
   const installed = serverVersion(env)
   if (compareVersions(body.release.slice(1), installed) <= 0) fail(400, 'release_not_newer', 'Choose a release newer than the installed version')
+  const coverage = await updateCoverage(env, serverId, getRequestURL(event).origin)
+  if (!coverage.covered) fail(402, 'update_not_covered', coverage.message || 'This Server has no Zugoid subscription, so zugoid.com offers it no new release.')
   const releases = await zugoidReleases(undefined, { prereleases: body.prereleases, installable: true })
   if (!releases.some(r => r.tagName === body.release)) fail(400, 'release_unavailable', 'Choose an available published Zugoid release')
   const now = new Date().toISOString()

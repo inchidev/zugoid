@@ -139,7 +139,7 @@ Replies in that DM Thread keep addressing the same Agent without another mention
 - Browser Run in local Wrangler uses the remote binding.
 - `pnpm dev:remote` — local frontend with HTTP requests proxied to a selected deployment and WebSockets connected directly to it. Personal targets live in ignored env files; see [Remote development](remote-development.md).
 - `pnpm deploy` — guarded Workers Builds entry point; refuses application deployments from a developer machine.
-- Scheduled jobs create private backups. There is no public telemetry collector or public control-plane heartbeat.
+- Scheduled jobs create private backups. There is no public telemetry collector or public control-plane heartbeat. The only call to zugoid.com is the Updates page's coverage check, which sends the Server's UUID.
 
 ## Threads and reads
 

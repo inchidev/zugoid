@@ -1,17 +1,18 @@
 import { DatabaseSync } from 'node:sqlite'
 import { beforeEach, afterEach, expect, it, vi } from 'vitest'
 import type { H3Event } from 'h3'
-const context = vi.hoisted(() => ({ body: {} as Record<string, unknown>, owner: true, stored: null as string | null, revision: 0, env: {} as Record<string, unknown> }))
+const context = vi.hoisted(() => ({ body: {} as Record<string, unknown>, owner: true, stored: null as string | null, revision: 0, env: {} as Record<string, unknown>, covered: true }))
 vi.mock('../../server/utils/guards', () => ({ requireMember: async () => ({ isOwner: context.owner, user: { id: 'owner' } }) }))
 vi.mock('../../server/utils/messages', () => ({ writeAudit: vi.fn(async () => {}) }))
 vi.mock('../../server/utils/releases', () => ({ zugoidReleases: vi.fn(async () => [{ tagName: 'v99.0.0' }]) }))
+vi.mock('../../server/utils/update-coverage', () => ({ updateCoverage: vi.fn(async () => context.covered ? { covered: true, reason: 'free', freeUntil: null, message: null, subscribeUrl: null } : { covered: false, reason: 'none', freeUntil: null, message: 'This Server has no Zugoid subscription.', subscribeUrl: null }) }))
 vi.mock('../../server/utils/cf', () => ({
   fail: (statusCode: number, code: string, message: string) => { throw Object.assign(Error(message), { statusCode, code }) },
   cf: () => ({ env: context.env }),
 }))
 const requestId = '22222222-2222-4222-8222-222222222222'
 beforeEach(() => {
-  context.body = { requestId, release: 'v99.0.0' }; context.owner = true; context.stored = null; context.revision = 0
+  context.body = { requestId, release: 'v99.0.0' }; context.owner = true; context.covered = true; context.stored = null; context.revision = 0
   context.env = {
     DB: { withSession: () => ({ prepare: (sql: string) => ({ bind: (...params: (string | number)[]) => ({
       all: async () => {
@@ -93,4 +94,9 @@ it('allows KV-only updates but accepts a download receipt only for the complete 
   context.body.sizeBytes = 8192
   await expect(confirm({} as H3Event)).resolves.toEqual({ ok: true })
   expect(JSON.parse(context.stored!).job.backup.verified).toBe(true)
+})
+it('refuses a new update request for a Server zugoid.com does not cover, and stores nothing', async () => {
+  context.covered = false
+  await expect(request()).rejects.toMatchObject({ statusCode: 402, code: 'update_not_covered', message: 'This Server has no Zugoid subscription.' })
+  expect(context.stored).toBeNull()
 })
