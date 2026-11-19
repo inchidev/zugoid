@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { it, expect } from 'vitest'
 import { buildVpsRelease } from '../../scripts/build-vps-release.mjs'
 import { sha256 } from '../../scripts/release-artifacts.mjs'
@@ -36,4 +36,20 @@ it('orders full SemVer identifiers in the operator CLI before downloading upgrad
     expect(spawnSync('bash', ['-c', source + `\nversion_newer '${previous}' '${next}'`]).status).toBe(1)
   }
   for (const invalid of ['01.0.0', '1.0.0-alpha.01', '1.0.0+build']) expect(spawnSync('bash', ['-c', source + `\nversion_newer '${invalid}' '0.0.0'`]).status).not.toBe(0)
+})
+
+it('refuses an upgrade zugoid.com does not offer this Server, says why, and holds nothing back when it cannot ask', () => {
+  const source = readFileSync('self-host/install/install.sh', 'utf8').replace(/main "\$@"\n$/, '')
+  const directory = mkdtempSync(join(tmpdir(), 'zugoid-coverage-'))
+  writeFileSync(join(directory, '.env'), "SERVER_ID='6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b'\nPUBLIC_ORIGIN='https://team.example.com'\n")
+  const run = (answer: string | null) => spawnSync('bash', ['-c', `${source}\ndir='${directory}'\ncoverage_answer() { ${answer === null ? 'return 7' : `printf '%s' '${answer}'`}; }\nrequire_coverage && echo continued`], { encoding: 'utf8' })
+  const refused = run(JSON.stringify({ covered: false, message: 'No release for this Server.', subscribeUrl: 'https://zugoid.com/billing/checkout?server=6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b' }))
+  expect(refused.status).toBe(1)
+  expect(refused.stderr).toContain('No release for this Server.')
+  expect(refused.stderr).toContain('origin=https%3A%2F%2Fteam.example.com')
+  expect(run(JSON.stringify({ covered: true, reason: 'free' })).stdout).toContain('continued')
+  const offline = run(null)
+  expect(offline.stdout).toContain('Could not ask zugoid.com')
+  expect(offline.stdout).toContain('continued')
+  expect(run('not json').stdout).toContain('continued')
 })

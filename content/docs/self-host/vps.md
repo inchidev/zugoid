@@ -122,11 +122,12 @@ sudo env ZUGOID_CHANNEL=prerelease zugoid upgrade <version>   # a named prerelea
 
 An upgrade:
 
-1. Downloads the selected release's installer and verifies it.
-2. Refuses a downgrade.
-3. Verifies and loads the new runtime image.
-4. Takes a mandatory backup.
-5. Starts the new version and checks it.
+1. Asks zugoid.com whether it offers this Server new releases, sending only the Server's UUID. A Server past its first 30 days without a subscription is offered none: the upgrade stops, changes nothing and prints a link to subscribe. If zugoid.com cannot be reached, the upgrade goes ahead.
+2. Downloads the selected release's installer and verifies it.
+3. Refuses a downgrade.
+4. Verifies and loads the new runtime image.
+5. Takes a mandatory backup.
+6. Starts the new version and checks it.
 
 If startup or discovery fails, it stops the failed stack, restores the previous Compose files, `.env`, CLI and all four volumes, and checks the old version again. The old image stays on the machine. Expect a short outage, because a single node restarts. If the rollback itself fails, the backup is kept and the command fails; read `zugoid logs` before you change anything else.
 
