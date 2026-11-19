@@ -43,9 +43,9 @@ encryption secrets to resolve build failures.
   identities must be explicitly linked; matching email addresses grants no access.
 - Enforce authorization on the Server, including HTTP, realtime, MCP and agent
   paths. Add meaningful regression coverage for changed access rules.
-- Append schema migrations within `server-v2`; create one with
-  `pnpm db:generate` after changing `drizzle/schema.ts`, or `pnpm db:generate:custom --name <name>` for triggers
-  and search, then import it in `server/utils/db.ts`. Never edit merged SQL or published tags/assets.
+- Append schema migrations within `server-v2`, one per release: change `drizzle/schema.ts` (and
+  `drizzle/baseline-custom.sql` for triggers and search), run `pnpm db:generate --name <name>`, then
+  import it in `server/utils/db.ts`. Never edit merged SQL or published tags/assets.
 - Keep backups separate from live file buckets. Preserve unrelated work and
   use synthetic Accounts/data for verification.
 - Native iOS/macOS packaging is frozen. Avoid expanding its scope incidentally.

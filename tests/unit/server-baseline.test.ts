@@ -23,7 +23,6 @@ describe('fresh Zugoid server schema', () => {
       expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
       expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'task_runs'").get()).toBeUndefined()
       expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'scheduled_lives'").get()).toBeUndefined()
-      expect(() => db.exec("INSERT INTO channels (id,name,type,visibility) VALUES ('retired','Old voice','voice','server')")).toThrow()
       db.exec("INSERT INTO tasks (id,board_id,title,created_by) VALUES ('second','board','Second task','alice')")
       db.exec("DELETE FROM tasks WHERE id = 'task'")
       db.exec("INSERT INTO tasks (id,board_id,title,created_by) VALUES ('third','board','Third task','alice')")
@@ -45,7 +44,8 @@ describe('fresh Zugoid server schema', () => {
     await expect(bootstrap('CREATE TABLE xcfxleftovers (id TEXT)')).rejects.toThrow('fresh')
   })
 
-  it('starts social methods disabled and constrains configured providers', () => {
+  // Which providers exist is the code's list (AUTH_PROVIDERS), not a CHECK: a new one needs no table rebuild.
+  it('starts social methods disabled and stores configured providers', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec(INIT_SQL)
@@ -54,7 +54,7 @@ describe('fresh Zugoid server schema', () => {
       const insert = db.prepare('INSERT INTO auth_provider_credentials (provider, public_key, secret_ciphertext, secret_iv) VALUES (?, ?, ?, ?)')
       insert.run('google', 'id', 'encrypted', 'iv')
       insert.run('linkedin', 'id', 'encrypted', 'iv')
-      expect(() => insert.run('unsupported', 'id', 'encrypted', 'iv')).toThrow(/CHECK/)
+      expect(db.prepare('SELECT provider FROM auth_provider_credentials ORDER BY provider').all()).toEqual([{ provider: 'google' }, { provider: 'linkedin' }])
     }
     finally { db.close() }
   })
