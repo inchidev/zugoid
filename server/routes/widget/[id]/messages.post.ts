@@ -6,7 +6,8 @@ import { limitWidgetMessage, widgetJsonHeaders } from '../../../utils/widget-pag
 import { bearerToken, findPublicWidget, postVisitorMessage, requireVisitor } from '../../../utils/widget-visitors'
 
 const schema = z.object({
-  content: z.string().max(WIDGET_LIMITS.message * 2),
+  content: z.string().max(WIDGET_LIMITS.message * 2).default(''),
+  attachmentIds: z.array(z.string().min(8).max(80)).max(WIDGET_LIMITS.files).optional(),
   name: z.string().max(WIDGET_LIMITS.claimedName * 2).optional(),
   email: z.string().max(254).optional(),
 })

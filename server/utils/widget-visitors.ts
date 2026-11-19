@@ -1,11 +1,14 @@
-import type { WidgetVisitorMessageDTO } from '../../shared/types'
-import { CUSTOMER_VISITOR_USER_ID, WIDGET_LIMITS, WIDGET_PUBLIC_ID } from '../../shared/customer-widgets'
+import type { WidgetVisitorFileDTO, WidgetVisitorMessageDTO } from '../../shared/types'
+import { CUSTOMER_VISITOR_USER_ID, WIDGET_FILE_TYPES, WIDGET_LIMITS, WIDGET_PUBLIC_ID } from '../../shared/customer-widgets'
+import { MAX_ATTACHMENT_BYTES, sniffMime } from '../../shared/mime'
+import { getServerId } from '../../shared/server-id'
 import { sha256Hex } from '../../shared/server-settings'
 import { newId, nowIso } from '../../shared/ids'
 import type { ZugoidEnv } from '../../workers/env'
 import { browserNameStatement, browserPersonStatements, identityContactTouchStatement, insertConversationStatement, touchConversationStatement } from '../../workers/customer-records'
 import { fanoutStoredMessage } from '../../workers/customer-delivery'
-import { fail } from './cf'
+import { fail, requireFiles } from './cf'
+import { requireStorageQuota } from './space-quota'
 import { randomToken } from './customer-widgets'
 
 /**
@@ -103,10 +106,11 @@ export async function listVisitorMessages(env: ZugoidEnv, widget: PublicWidget, 
        WHERE cv.source_channel_id = ?1 AND cv.identity_id = ?2 AND m.deleted_at IS NULL AND (?3 IS NULL OR wm.rowid > ?3)
        ORDER BY wm.rowid ${cursor === null ? 'DESC' : 'ASC'} LIMIT ${WIDGET_LIMITS.page}
      ) ORDER BY seq`,
-  ).bind(widget.channelId, visitor.identityId, cursor).all<WidgetVisitorMessageDTO & { seq: number }>()
+  ).bind(widget.channelId, visitor.identityId, cursor).all<Omit<WidgetVisitorMessageDTO, 'attachments'> & { seq: number }>()
   const list = rows.results ?? []
+  const files = await visitorFiles(env, list.map(message => message.id))
   return {
-    messages: list.map(({ seq: _, ...message }) => message),
+    messages: list.map(({ seq: _, ...message }) => ({ ...message, attachments: files.get(message.id) ?? [] })),
     cursor: list.length ? String(list.at(-1)!.seq) : after && cursor !== null ? String(cursor) : null,
   }
 }
@@ -116,9 +120,13 @@ export async function listVisitorMessages(env: ZugoidEnv, widget: PublicWidget, 
  * filed as Spam (which stays quiet); after one is resolved or put in Trash, a new one starts.
  * A name or email typed with it is kept as an unverified claim.
  */
-export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, visitor: WidgetVisitor, input: { content: string; name?: string | null; email?: string | null }): Promise<WidgetVisitorMessageDTO> {
+export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, visitor: WidgetVisitor, input: { content: string; name?: string | null; email?: string | null; attachmentIds?: string[] }): Promise<WidgetVisitorMessageDTO> {
   const content = input.content.trim()
-  if (!content) fail(400, 'bad_request', 'Write a message first')
+  const attachmentIds = [...new Set(input.attachmentIds ?? [])]
+  if (attachmentIds.length > WIDGET_LIMITS.files) fail(400, 'bad_request', `A message can carry at most ${WIDGET_LIMITS.files} files`)
+  const pending = attachmentIds.length ? await pendingVisitorFiles(env, widget, visitor, attachmentIds) : []
+  if (pending.length !== attachmentIds.length) fail(400, 'bad_request', 'A file is no longer there. Attach it again.')
+  if (!content && !pending.length) fail(400, 'bad_request', 'Write a message first')
   if (content.length > WIDGET_LIMITS.message) fail(400, 'bad_request', `A message can be at most ${WIDGET_LIMITS.message} characters`)
   const name = claimedName(input.name)
   const email = claimedEmail(input.email)
@@ -137,7 +145,7 @@ export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, v
           env.DB.prepare(
             `INSERT INTO channels (id, name, topic, type, section, visibility, category_id, position, live_meeting_id, parent_id, parent_message_id, created_at, updated_at)
              VALUES (?, ?, '', 'conversation', 'customers', 'private', NULL, 0, NULL, ?, NULL, ?, ?)`,
-          ).bind(conversationId, content.replace(/\s+/gu, ' ').slice(0, 80), widget.channelId, at, at),
+          ).bind(conversationId, (content || 'A file').replace(/\s+/gu, ' ').slice(0, 80), widget.channelId, at, at),
           insertConversationStatement(env, { channelId: conversationId, sourceChannelId: widget.channelId, identityId: visitor.identityId, at }),
         ],
     env.DB.prepare(
@@ -145,6 +153,9 @@ export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, v
        VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)`,
     ).bind(messageId, conversationId, CUSTOMER_VISITOR_USER_ID, content, at),
     env.DB.prepare("INSERT INTO customer_widget_messages (message_id, conversation_channel_id, direction, created_at) VALUES (?, ?, 'inbound', ?)").bind(messageId, conversationId, at),
+    // The Visitor's files move from the Widget, where they waited, to the Conversation and this message.
+    ...pending.map(file => env.DB.prepare('UPDATE attachments SET message_id = ?, channel_id = ? WHERE id = ? AND message_id IS NULL AND channel_id = ?')
+      .bind(messageId, conversationId, file.id, widget.channelId)),
     identityContactTouchStatement(env, { identityId: visitor.identityId, at, inbound: true }),
     env.DB.prepare('UPDATE customer_visitors SET claimed_name = coalesce(?, claimed_name), claimed_email = coalesce(?, claimed_email), last_seen_at = ? WHERE id = ?')
       .bind(name, email, at, visitor.id),
@@ -156,5 +167,68 @@ export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, v
       : [],
   ])
   await fanoutStoredMessage(env, messageId)
-  return { id: messageId, direction: 'inbound', content, authorName: null, createdAt: at }
+  return { id: messageId, direction: 'inbound', content, authorName: null, createdAt: at, attachments: pending }
+}
+
+/** Where a Visitor's file waits until its message is sent: under the Widget, in a folder of their own. */
+const visitorFolder = (serverId: string, widget: PublicWidget, visitor: WidgetVisitor) => `${serverId}/${widget.channelId}/visitor-${visitor.id}/`
+
+const fileColumns = 'id, filename, content_type AS contentType, width, height'
+
+/**
+ * A picture or voice recording from a Visitor, kept until they send it. Its type is read from
+ * its bytes, never from what the browser says, and only WIDGET_FILE_TYPES are taken.
+ */
+export async function storeVisitorFile(env: ZugoidEnv, widget: PublicWidget, visitor: WidgetVisitor, file: { data: Uint8Array; filename?: string }): Promise<WidgetVisitorFileDTO> {
+  if (!file.data.byteLength) fail(400, 'bad_request', 'The file is empty')
+  if (file.data.byteLength > MAX_ATTACHMENT_BYTES) fail(413, 'too_large', 'A file can be at most 10 MB')
+  const contentType = sniffMime(file.data, file.filename || 'file')
+  if (!contentType || !WIDGET_FILE_TYPES.has(contentType)) fail(415, 'unsupported_type', 'Send a picture or a voice message')
+  await requireStorageQuota(env, widget.spaceId, file.data.byteLength)
+  const id = newId()
+  const filename = (file.filename || (contentType.startsWith('audio/') ? 'voice' : 'picture')).replace(/[^\w.-]+/gu, '_').slice(0, 80)
+  const key = `${visitorFolder(await getServerId(env.DB), widget, visitor)}${id}-${filename}`
+  await requireFiles(env).put(key, file.data, { httpMetadata: { contentType } })
+  await env.DB.prepare(`INSERT INTO attachments (id, message_id, channel_id, uploader_id, r2_key, filename, content_type, size_bytes, width, height, created_at)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`).bind(id, widget.channelId, CUSTOMER_VISITOR_USER_ID, key, filename, contentType, file.data.byteLength, nowIso()).run()
+  return { id, filename, contentType, width: null, height: null }
+}
+
+/** This Visitor's files that wait on the Widget for their message. */
+async function pendingVisitorFiles(env: ZugoidEnv, widget: PublicWidget, visitor: WidgetVisitor, ids: string[]): Promise<WidgetVisitorFileDTO[]> {
+  const prefix = visitorFolder(await getServerId(env.DB), widget, visitor)
+  const rows = await env.DB.prepare(`SELECT ${fileColumns} FROM attachments
+    WHERE id IN (${ids.map(() => '?').join(',')}) AND message_id IS NULL AND channel_id = ? AND uploader_id = ? AND substr(r2_key, 1, ?) = ?`)
+    .bind(...ids, widget.channelId, CUSTOMER_VISITOR_USER_ID, prefix.length, prefix).all<WidgetVisitorFileDTO>()
+  return rows.results ?? []
+}
+
+async function visitorFiles(env: ZugoidEnv, messageIds: string[]): Promise<Map<string, WidgetVisitorFileDTO[]>> {
+  const files = new Map<string, WidgetVisitorFileDTO[]>()
+  for (let start = 0; start < messageIds.length; start += 90) {
+    const ids = messageIds.slice(start, start + 90)
+    const rows = await env.DB.prepare(`SELECT message_id AS messageId, ${fileColumns} FROM attachments WHERE message_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, id`)
+      .bind(...ids).all<WidgetVisitorFileDTO & { messageId: string }>()
+    for (const { messageId, ...file } of rows.results ?? []) files.set(messageId, [...files.get(messageId) ?? [], file])
+  }
+  return files
+}
+
+/**
+ * A file the Visitor may open: on a message with a delivery row in a Conversation of their
+ * own Identity on this Widget, or one of their own still waiting to be sent. Nothing else.
+ */
+export async function readVisitorFile(env: ZugoidEnv, widget: PublicWidget, visitor: WidgetVisitor, fileId: string) {
+  const prefix = visitorFolder(await getServerId(env.DB), widget, visitor)
+  const row = await env.DB.prepare(
+    `SELECT a.r2_key AS key, a.filename, a.content_type AS contentType FROM attachments a
+     WHERE a.id = ?1 AND (
+       EXISTS (SELECT 1 FROM customer_widget_messages wm
+         JOIN customer_conversations cv ON cv.channel_id = wm.conversation_channel_id
+         JOIN messages m ON m.id = wm.message_id
+         WHERE wm.message_id = a.message_id AND cv.source_channel_id = ?2 AND cv.identity_id = ?3 AND m.deleted_at IS NULL)
+       OR (a.message_id IS NULL AND a.channel_id = ?2 AND substr(a.r2_key, 1, length(?4)) = ?4))`,
+  ).bind(fileId, widget.channelId, visitor.identityId, prefix).first<{ key: string; filename: string; contentType: string }>()
+  if (!row) fail(404, 'not_found', 'File not found')
+  return row
 }

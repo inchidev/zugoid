@@ -12,7 +12,7 @@ import { conversationFacts, teamMessageStatements } from '../../workers/customer
 import { messages } from '../../drizzle/schema'
 import { eq } from 'drizzle-orm'
 import { newId, nowIso } from '../../shared/ids'
-import { bearerToken, findPublicWidget, listVisitorMessages, postVisitorMessage, requireVisitor, startVisitorSession } from '../../server/utils/widget-visitors'
+import { bearerToken, findPublicWidget, listVisitorMessages, postVisitorMessage, readVisitorFile, requireVisitor, startVisitorSession, storeVisitorFile } from '../../server/utils/widget-visitors'
 import { widgetFrameHtml, widgetLoaderScript } from '../../server/utils/widget-pages'
 import { normalizeWidgetSite, widgetFrameCsp, widgetSiteAllows } from '../../shared/customer-widgets'
 import { ALL_PERMISSIONS } from '../../shared/permissions'
@@ -22,6 +22,7 @@ import { d1 } from '../helpers/sqlite-d1'
 
 let sqlite: DatabaseSync
 let env: ZugoidEnv
+let stored: Map<string, Uint8Array>
 
 function member(id: string, perms = 0, isOwner = false): ServerMembership {
   return {
@@ -59,7 +60,11 @@ beforeEach(() => {
     INSERT INTO server_identity(singleton,id) VALUES(1,'00000000-0000-4000-8000-000000000001');
     INSERT INTO server(id,name,owner_id) VALUES('00000000-0000-4000-8000-000000000001','Widget test','owner');
   `)
-  env = { DB: d1(sqlite) } as unknown as ZugoidEnv
+  stored = new Map()
+  env = {
+    DB: d1(sqlite),
+    FILES: { put: async (key: string, value: Uint8Array) => { stored.set(key, new Uint8Array(value)) }, get: async (key: string) => stored.has(key) ? { size: stored.get(key)!.byteLength } : null },
+  } as unknown as ZugoidEnv
 })
 
 afterEach(() => sqlite.close())
@@ -188,6 +193,52 @@ describe('a Visitor', () => {
     await expect(findPublicWidget(env, '../etc')).rejects.toMatchObject({ statusCode: 404 })
     await updateCustomerWidget(env, owner(), channelId, { enabled: false })
     await expect(findPublicWidget(env, publicId)).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+describe('pictures and voice through a Widget', () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+  const ogg = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, 0, 0])
+
+  it('takes a picture by its bytes, sends it with the message and lets only that Visitor open it', async () => {
+    const { public: site } = await widget()
+    const a = await visitor(site)
+    const b = await visitor(site)
+    const picture = await storeVisitorFile(env, site, a.visitor, { data: png, filename: 'screen shot.png' })
+    expect(picture).toMatchObject({ contentType: 'image/png', filename: 'screen_shot.png' })
+    await expect(readVisitorFile(env, site, b.visitor, picture.id)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(postVisitorMessage(env, site, b.visitor, { content: '', attachmentIds: [picture.id] })).rejects.toMatchObject({ statusCode: 400 })
+    const message = await postVisitorMessage(env, site, a.visitor, { content: '', attachmentIds: [picture.id] })
+    expect(message.attachments).toEqual([expect.objectContaining({ id: picture.id })])
+    expect((await readVisitorFile(env, site, a.visitor, picture.id)).contentType).toBe('image/png')
+    await expect(readVisitorFile(env, site, b.visitor, picture.id)).rejects.toMatchObject({ statusCode: 404 })
+    const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
+    expect((await teamReads(conversationId))[0]!.attachments).toEqual([expect.objectContaining({ contentType: 'image/png', url: `/api/files/${picture.id}` })])
+    expect((await listVisitorMessages(env, site, a.visitor)).messages[0]!.attachments).toEqual([expect.objectContaining({ id: picture.id })])
+  })
+
+  it('takes a voice recording and refuses anything else', async () => {
+    const { public: site } = await widget()
+    const { visitor: v } = await visitor(site)
+    expect(await storeVisitorFile(env, site, v, { data: ogg, filename: 'voice.ogg' })).toMatchObject({ contentType: 'audio/ogg' })
+    await expect(storeVisitorFile(env, site, v, { data: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), filename: 'invoice.pdf' })).rejects.toMatchObject({ statusCode: 415 })
+    await expect(storeVisitorFile(env, site, v, { data: new TextEncoder().encode('<script>alert(1)</script>'), filename: 'x.png' })).rejects.toMatchObject({ statusCode: 415 })
+  })
+
+  it('opens a team reply’s file for the Visitor, never a note’s', async () => {
+    const { public: site } = await widget()
+    const { visitor: v } = await visitor(site)
+    await postVisitorMessage(env, site, v, { content: 'Hi' })
+    const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
+    await teamWrites('owner', conversationId, 'Look', true)
+    await teamWrites('owner', conversationId, 'Internal', false)
+    const idOf = (content: string) => (sqlite.prepare('SELECT id FROM messages WHERE content = ?').get(content) as { id: string })
+    const [reply, note] = [idOf('Look'), idOf('Internal')]
+    sqlite.exec(`INSERT INTO attachments (id, message_id, channel_id, uploader_id, r2_key, filename, content_type, size_bytes, created_at) VALUES
+      ('file-reply', '${reply!.id}', '${conversationId}', 'owner', 'k1', 'a.png', 'image/png', 1, '2026-11-20'),
+      ('file-note', '${note!.id}', '${conversationId}', 'owner', 'k2', 'b.png', 'image/png', 1, '2026-11-20')`)
+    expect((await readVisitorFile(env, site, v, 'file-reply')).key).toBe('k1')
+    await expect(readVisitorFile(env, site, v, 'file-note')).rejects.toMatchObject({ statusCode: 404 })
   })
 })
 

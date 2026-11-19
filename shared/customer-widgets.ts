@@ -11,7 +11,12 @@ export const WIDGET_LIMITS = {
   userAgent: 512,
   /** Messages a Visitor reads in one request. */
   page: 200,
+  /** Files on one message from a Visitor. */
+  files: 4,
 } as const
+
+/** What a Visitor may send: pictures and voice recordings. */
+export const WIDGET_FILE_TYPES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav'])
 
 /** A Widget's public ID: random, in the embed code and the frame's address. */
 export const WIDGET_PUBLIC_ID = /^[A-Za-z0-9_-]{16,64}$/u
@@ -57,7 +62,9 @@ export function widgetFrameCsp(sites: readonly string[]): string {
     "default-src 'none'",
     "script-src 'self'",
     "style-src 'unsafe-inline'",
-    "img-src 'self' data:",
+    // A file the frame fetched with its token is shown from a blob: URL.
+    "img-src 'self' data: blob:",
+    "media-src blob:",
     "font-src 'self'",
     "connect-src 'self'",
     `frame-ancestors ${sites.length ? sites.join(' ') : "'none'"}`,

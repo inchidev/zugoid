@@ -130,15 +130,21 @@ function personName(user: TelegramUser): string {
 }
 
 /**
- * One update from Telegram, taken once: an update below the bot's offset was already
- * taken. A message in a private chat goes into the sender's latest open, waiting or Spam
- * Conversation with this bot, or starts one; /start only gets the greeting.
+ * One update from Telegram, taken once. The bot's offset moves past it in one write before
+ * anything else, so a second delivery of the same update finds it taken; if storing it
+ * fails, the offset moves back and Telegram, told so, sends it again. A message in a private
+ * chat goes into the sender's latest open, waiting or Spam Conversation with this bot, or
+ * starts one; /start only gets the greeting.
  */
 export async function takeTelegramUpdate(env: ZugoidEnv, bot: TelegramBot, update: TelegramUpdate): Promise<void> {
-  if (update.update_id < bot.updateOffset) return
+  const claimed = await env.DB.prepare('UPDATE customer_telegram_bots SET update_offset = ?2, last_error = NULL, updated_at = ?3 WHERE channel_id = ?1 AND update_offset <= ?4')
+    .bind(bot.channelId, update.update_id + 1, nowIso(), update.update_id).run()
+  if (!claimed.meta.changes) return
+  bot.updateOffset = update.update_id + 1
   const message = update.message
   const sender = message?.from
-  if (message && sender && !sender.is_bot && message.chat.type === 'private' && bot.enabled) {
+  if (!message || !sender || sender.is_bot || message.chat.type !== 'private' || !bot.enabled) return
+  try {
     const token = await telegramToken(env, bot)
     if (message.text?.trim() === '/start') {
       if (bot.greeting) await telegramCall(bot.apiBase, token, 'sendMessage', { chat_id: message.chat.id, text: bot.greeting })
@@ -147,9 +153,12 @@ export async function takeTelegramUpdate(env: ZugoidEnv, bot: TelegramBot, updat
       await storeInbound(env, bot, token, message, sender)
     }
   }
-  bot.updateOffset = update.update_id + 1
-  await env.DB.prepare('UPDATE customer_telegram_bots SET update_offset = max(update_offset, ?), last_error = NULL, updated_at = ? WHERE channel_id = ?')
-    .bind(bot.updateOffset, nowIso(), bot.channelId).run()
+  catch (error) {
+    await env.DB.prepare('UPDATE customer_telegram_bots SET update_offset = ?2 WHERE channel_id = ?1 AND update_offset = ?3')
+      .bind(bot.channelId, update.update_id, update.update_id + 1).run()
+    bot.updateOffset = update.update_id
+    throw error
+  }
 }
 
 async function storeInbound(env: ZugoidEnv, bot: TelegramBot, token: string, message: TelegramMessage, sender: TelegramUser) {
@@ -244,12 +253,21 @@ export async function sendTelegramReply(env: ZugoidEnv, facts: ConversationFacts
       const object = await env.DB.prepare('SELECT r2_key AS key FROM attachments WHERE id = ?').bind(attachment.id).first<{ key: string }>()
       const file = object ? await fileStorage(env).get(object.key) : null
       if (!file) throw new TelegramError(`${attachment.filename} is no longer stored`)
-      const { method, field } = sendMethod(attachment.contentType)
-      const form = new FormData()
-      form.set('chat_id', chat.value)
-      if (index === 0 && captioned && text) form.set('caption', text)
-      form.set(field, new Blob([await file.arrayBuffer()], { type: attachment.contentType }), attachment.filename)
-      telegramMessageId = (await telegramCall<{ message_id: number }>(bot.apiBase, token, method, form, 120_000)).message_id
+      const bytes = await file.arrayBuffer()
+      const sendAs = async ({ method, field }: { method: string; field: string }) => {
+        const form = new FormData()
+        form.set('chat_id', chat.value)
+        if (index === 0 && captioned && text) form.set('caption', text)
+        form.set(field, new Blob([bytes], { type: attachment.contentType }), attachment.filename)
+        return (await telegramCall<{ message_id: number }>(bot.apiBase, token, method, form, 120_000)).message_id
+      }
+      const preferred = sendMethod(attachment.contentType)
+      try { telegramMessageId = await sendAs(preferred) }
+      catch (error) {
+        // A recording Telegram will not play as a voice message still arrives, as a file.
+        if (!(error instanceof TelegramError) || error.code !== 400 || preferred.method === 'sendDocument') throw error
+        telegramMessageId = await sendAs({ method: 'sendDocument', field: 'document' })
+      }
     }
   }
   catch (caught) {

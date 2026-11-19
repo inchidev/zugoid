@@ -10,7 +10,7 @@ Open a focused PR to main. Required checks include lint, type checking, tests, m
 
 ## Release PR
 
-1. Create a branch from current main. Increase `version` in both `package.json` and `packages/deployment-core/package.json`, add `docs/release-notes/v<version>.md` covering the accumulated changes, and add `"<version>": "<YYYY-MM-DD>"` to `content/release-dates.json` so the release appears at zugoid.com/changelog.
+1. Create a branch from current main. Increase `version` (for now only its patch number: 0.3.1, 0.3.2 and so on, whatever the release holds) in both `package.json` and `packages/deployment-core/package.json`, add `docs/release-notes/v<version>.md` covering the accumulated changes, and add `"<version>": "<YYYY-MM-DD>"` to `content/release-dates.json` so the release appears at zugoid.com/changelog.
 2. Open the PR to main and apply the **release** label. It receives the same CI and native Worker Preview as other PRs. The version must increase, both package versions must match, and release notes must exist. A release label without a version change is rejected.
 3. Merge after reviewing the Preview and required checks. The **Release** workflow validates the merged PR and waits for successful main CI at that exact merge commit. It builds all components from that commit, verifies module and asset hashes and migration chains, and includes the portable `linux/amd64` runtime image and Docs archive.
 4. The workflow creates the version tag and an unpublished draft, verifies downloaded checksums, then publishes the complete immutable release. Alpha/beta/rc versions are prereleases. 

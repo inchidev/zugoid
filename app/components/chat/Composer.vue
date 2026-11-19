@@ -147,6 +147,8 @@ const {
   onRecorded(file) {
     addFiles([file])
   },
+  // A reply in a Customer Conversation leaves as a voice message, so it keeps its compressed form.
+  compressed: () => props.deliver === true,
   onError(message) {
     toast.add({ title: message, color: 'error' })
   },

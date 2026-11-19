@@ -506,6 +506,16 @@ export type WidgetVisitorMessageDTO = {
   /** A team member's display name on a reply; nothing on the Visitor's own. */
   authorName: string | null
   createdAt: string
+  /** Pictures and voice; the frame reads each from the Widget's files route with its token. */
+  attachments: WidgetVisitorFileDTO[]
+}
+
+export type WidgetVisitorFileDTO = {
+  id: string
+  filename: string
+  contentType: string
+  width: number | null
+  height: number | null
 }
 
 export type MailThreadDTO = {
