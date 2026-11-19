@@ -123,7 +123,8 @@ export function migrationSql(before, after) {
 
   const added = new Set([...after.tables.keys()].filter(name => !before.tables.has(name)))
   const direct = [...after.tables.keys()].filter(name => before.tables.has(name) && !before.virtuals.includes(name) && changed(before.tables.get(name), after.tables.get(name)))
-  const rebuilt = withDependents(direct, before, after)
+  // A new table that references a rebuilt one is only created, after it.
+  const rebuilt = new Set([...withDependents(direct, before, after)].filter(name => !added.has(name)))
   const out = []
   const emit = sql => out.push(sql.trim().endsWith(';') ? sql.trim() : `${sql.trim()};`)
 
@@ -216,17 +217,6 @@ function main() {
   const slug = argument('--name') ?? pending[0]?.replace(/^\d{4}_|\.sql$/gu, '')
   if (!slug || !/^[a-z0-9]+(?:_[a-z0-9]+)*$/u.test(slug)) throw new Error('Name the migration: pnpm db:generate --name some_words')
 
-  // Drop this release's earlier draft, so drizzle-kit writes its snapshot from the released one.
-  const journalPath = join(root, directory, 'meta/_journal.json')
-  const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
-  for (const name of pending) {
-    const number = name.slice(0, 4)
-    rmSync(join(root, directory, name))
-    rmSync(join(root, directory, `meta/${number}_snapshot.json`), { force: true })
-    journal.entries = journal.entries.filter(entry => entry.tag !== name.replace(/\.sql$/u, ''))
-  }
-  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}`)
-
   const before = databaseFrom(released.map(name => readFileSync(join(root, directory, name), 'utf8')))
   // Inside the checkout: drizzle-kit resolves its output relative to it.
   const work = mkdtempSync(join(root, '.migration-'))
@@ -239,6 +229,17 @@ function main() {
       console.log('No schema changes: no migration written')
       return
     }
+
+    // Drop this release's earlier draft, so drizzle-kit writes its snapshot from the released one.
+    const journalPath = join(root, directory, 'meta/_journal.json')
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+    for (const name of pending) {
+      const number = name.slice(0, 4)
+      rmSync(join(root, directory, name))
+      rmSync(join(root, directory, `meta/${number}_snapshot.json`), { force: true })
+      journal.entries = journal.entries.filter(entry => entry.tag !== name.replace(/\.sql$/u, ''))
+    }
+    writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}`)
 
     // drizzle-kit keeps its snapshot, which `pnpm db:schema:check` compares the schema with; the SQL is ours.
     const run = spawnSync('pnpm', ['exec', 'drizzle-kit', 'generate', '--name', slug], { cwd: root, encoding: 'utf8' })

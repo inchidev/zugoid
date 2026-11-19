@@ -1,12 +1,17 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { INIT_SQL } from '../../server/utils/db'
+import { getDb, INIT_SQL } from '../../server/utils/db'
 import type { ServerMembership } from '../../server/utils/channel-access'
 import { listCustomerContacts, mergeCustomerContacts } from '../../server/utils/customers'
 import {
-  createCustomerWidget, listCustomerWidgets, listWidgetConversations, postCustomerConversationMessage, readCustomerConversation,
+  createCustomerWidget, listCustomerWidgets, listSourceConversations, readCustomerConversation,
   setCustomerWidgetMembers, updateCustomerConversation, updateCustomerWidget,
 } from '../../server/utils/customer-widgets'
+import { hydrateMessages } from '../../server/utils/messages'
+import { conversationFacts, teamMessageStatements } from '../../workers/customer-delivery'
+import { messages } from '../../drizzle/schema'
+import { eq } from 'drizzle-orm'
+import { newId, nowIso } from '../../shared/ids'
 import { bearerToken, findPublicWidget, listVisitorMessages, postVisitorMessage, requireVisitor, startVisitorSession } from '../../server/utils/widget-visitors'
 import { widgetFrameHtml, widgetLoaderScript } from '../../server/utils/widget-pages'
 import { normalizeWidgetSite, widgetFrameCsp, widgetSiteAllows } from '../../shared/customer-widgets'
@@ -25,6 +30,24 @@ function member(id: string, perms = 0, isOwner = false): ServerMembership {
   } as unknown as ServerMembership
 }
 const owner = () => member('owner', ALL_PERMISSIONS, true)
+
+/** What the channel's socket stores for a team message: a note, or with `deliver` a reply through the Source. */
+async function teamWrites(authorId: string, conversationId: string, content: string, deliver: boolean) {
+  const facts = (await conversationFacts(env, conversationId))!
+  const id = newId()
+  const at = nowIso()
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO messages (id, channel_id, author_id, content, reply_to_id, edited_at, deleted_at, created_at) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)')
+      .bind(id, conversationId, authorId, content, at),
+    ...teamMessageStatements(env, facts, { messageId: id, at, deliver }),
+  ])
+}
+
+/** The Conversation as the team's message list reads it. */
+async function teamReads(conversationId: string) {
+  const rows = await getDb(env.DB).select().from(messages).where(eq(messages.channelId, conversationId)).orderBy(messages.id)
+  return hydrateMessages(env, rows, 'owner')
+}
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:')
@@ -85,7 +108,7 @@ describe('a Visitor', () => {
     await postVisitorMessage(env, site, v, { content: 'Second line' })
     expect(sqlite.prepare("SELECT kind, value, verified_at FROM customer_identities").all()).toEqual([{ kind: 'browser', value: v.id, verified_at: null }])
     expect(sqlite.prepare('SELECT name, last_seen_at IS NOT NULL AS seen FROM customer_contacts').all()).toEqual([{ name: 'Visitor 1', seen: 1 }])
-    const conversations = await listWidgetConversations(env, owner(), channelId, 'open')
+    const conversations = await listSourceConversations(env, owner(), channelId, 'open')
     expect(conversations).toEqual([expect.objectContaining({ contactName: 'Visitor 1', preview: 'Second line', status: 'open' })])
     expect(sqlite.prepare("SELECT c.type, c.section, c.parent_id AS parentId FROM channels c WHERE c.type = 'conversation'").all())
       .toEqual([{ type: 'conversation', section: 'customers', parentId: channelId }])
@@ -109,14 +132,15 @@ describe('a Visitor', () => {
     const first = await listVisitorMessages(env, site, v)
     expect(first.messages).toEqual([expect.objectContaining({ direction: 'inbound', content: 'Question', authorName: null })])
     const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
-    await postCustomerConversationMessage(env, owner(), conversationId, { content: 'Internal: VIP customer', kind: 'note' })
-    await postCustomerConversationMessage(env, owner(), conversationId, { content: 'Answer', kind: 'reply' })
+    await teamWrites('owner', conversationId, 'Internal: VIP customer', false)
+    await teamWrites('owner', conversationId, 'Answer', true)
     const next = await listVisitorMessages(env, site, v, first.cursor)
     expect(next.messages).toEqual([expect.objectContaining({ direction: 'outbound', content: 'Answer', authorName: 'Owner' })])
     expect((await listVisitorMessages(env, site, v, next.cursor)).messages).toEqual([])
-    const team = await readCustomerConversation(env, owner(), conversationId)
-    expect(team.messages.map(message => [message.content, message.direction])).toEqual([['Question', 'inbound'], ['Internal: VIP customer', null], ['Answer', 'outbound']])
-    expect(team.visitor).toMatchObject({ country: 'DE' })
+    const team = await teamReads(conversationId)
+    expect(team.map(message => [message.content, message.customer?.direction])).toEqual([['Question', 'inbound'], ['Internal: VIP customer', null], ['Answer', 'outbound']])
+    expect(team[0]!.author.displayName).toBe('Visitor 1')
+    expect((await readCustomerConversation(env, owner(), conversationId)).visitor).toMatchObject({ country: 'DE' })
   })
 
   it('cannot read another Visitor’s Conversation, nor use a token on another Widget', async () => {
@@ -147,10 +171,10 @@ describe('a Visitor', () => {
     const { channelId, public: site } = await widget()
     const { visitor: v } = await visitor(site)
     await postVisitorMessage(env, site, v, { content: 'One' })
-    const [first] = await listWidgetConversations(env, owner(), channelId, 'open')
+    const [first] = await listSourceConversations(env, owner(), channelId, 'open')
     await updateCustomerConversation(env, owner(), first!.channelId, { status: 'waiting', assigneeId: 'agent-smith' })
     await postVisitorMessage(env, site, v, { content: 'Two' })
-    expect(await listWidgetConversations(env, owner(), channelId, 'open')).toEqual([expect.objectContaining({ channelId: first!.channelId, assigneeId: 'agent-smith' })])
+    expect(await listSourceConversations(env, owner(), channelId, 'open')).toEqual([expect.objectContaining({ channelId: first!.channelId, assigneeId: 'agent-smith' })])
     await updateCustomerConversation(env, owner(), first!.channelId, { status: 'resolved' })
     await postVisitorMessage(env, site, v, { content: 'Three' })
     expect(sqlite.prepare('SELECT count(*) AS n FROM customer_conversations').get()).toEqual({ n: 2 })
@@ -172,13 +196,13 @@ describe('the team that answers a Widget', () => {
     const { channelId, public: site } = await widget()
     const { visitor: v } = await visitor(site)
     await postVisitorMessage(env, site, v, { content: 'Hello' })
-    const [conversation] = await listWidgetConversations(env, owner(), channelId, 'open')
-    await expect(listWidgetConversations(env, member('agent-smith'), channelId, 'open')).rejects.toMatchObject({ statusCode: 404 })
+    const [conversation] = await listSourceConversations(env, owner(), channelId, 'open')
+    await expect(listSourceConversations(env, member('agent-smith'), channelId, 'open')).rejects.toMatchObject({ statusCode: 404 })
     await expect(readCustomerConversation(env, member('agent-smith'), conversation!.channelId)).rejects.toMatchObject({ statusCode: 404 })
     await expect(listCustomerContacts(env, member('agent-smith'))).rejects.toMatchObject({ statusCode: 404 })
     await setCustomerWidgetMembers(env, owner(), channelId, ['agent-smith'])
     expect(await listCustomerContacts(env, member('agent-smith'))).toEqual([expect.objectContaining({ name: 'Visitor 1', conversationCount: 1 })])
-    await postCustomerConversationMessage(env, member('agent-smith'), conversation!.channelId, { content: 'On it', kind: 'reply' })
+    await teamWrites('agent-smith', conversation!.channelId, 'On it', true)
     expect(sqlite.prepare('SELECT user_id FROM channel_members WHERE channel_id = ? ORDER BY user_id').all(channelId)).toEqual([{ user_id: 'agent-smith' }, { user_id: 'owner' }])
   })
 

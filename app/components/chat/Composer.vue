@@ -29,6 +29,8 @@ const props = defineProps<{
   primary?: boolean
   /** False where `@channel` and `@here` would reach nobody, as in a Direct Message. */
   groupMentions?: boolean
+  /** In a Customer Conversation: true sends a reply through its Source, false a note for the team. */
+  deliver?: boolean
 }>()
 
 const MAX_LENGTH = 2000
@@ -416,6 +418,7 @@ async function submit() {
     createdAt: nowIso(),
     clientId,
     deliveryState: submission.files.length ? 'uploading' : 'sending',
+    ...props.deliver === undefined ? {} : { customer: props.deliver ? { direction: 'outbound', status: 'pending' } : { direction: null, status: null } },
   }
   qc.setQueryData<InfiniteData<Page>>(['messages', channelId], (old) => {
     if (!old?.pages?.length) return { pages: [{ messages: [optimistic], nextCursor: null }], pageParams: [undefined] }
@@ -450,6 +453,7 @@ async function submit() {
     clientId,
     attachmentIds: attachmentIds.length ? attachmentIds : undefined,
     agentMode: props.agentId ? 'queue' : (props.agentBusy || toolbarBusy.value) ? agentMode.value : undefined,
+    ...props.deliver === undefined ? {} : { deliver: props.deliver },
   })
   agentMode.value = 'queue'
 }

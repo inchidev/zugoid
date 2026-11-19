@@ -27,12 +27,15 @@ function readableMailboxes(member: ServerMembership): string {
     WHERE mb.enabled = 1 AND sc.space_id IN (${spaceSql(member.authorization)})`
 }
 
-/** Widgets the member answers: they are one of its channel members, in a Space they reach. */
+/**
+ * Widgets and Telegram bots the member answers: they are one of its channel members, in a
+ * Space they reach. A Mailbox is answered by its grants instead.
+ */
 export function answeredWidgets(member: ServerMembership): string {
-  return `SELECT w.channel_id FROM customer_widgets w
-    JOIN channel_members cm ON cm.channel_id = w.channel_id AND cm.user_id = ${quoted(member.user.id)}
-    JOIN channels sc ON sc.id = w.channel_id
-    WHERE sc.space_id IN (${spaceSql(member.authorization)})`
+  return `SELECT s.channel_id FROM customer_sources s
+    JOIN channel_members cm ON cm.channel_id = s.channel_id AND cm.user_id = ${quoted(member.user.id)}
+    JOIN channels sc ON sc.id = s.channel_id
+    WHERE s.kind IN ('widget', 'telegram') AND sc.space_id IN (${spaceSql(member.authorization)})`
 }
 
 export function readableSources(member: ServerMembership): string {
@@ -50,7 +53,7 @@ function readableSpaces(member: ServerMembership): string {
   return `SELECT space_id FROM channels WHERE id IN (${readableSources(member)})`
 }
 
-/** Customers exists for a member who may read email or who answers a Widget. */
+/** Customers exists for a member who may read email or who answers a Widget or a Telegram bot. */
 export async function requireCustomersReader(env: ZugoidEnv, member: ServerMembership) {
   if (member.isOwner || hasPermission(member.perms, Permission.readMail)) return
   if (!await env.DB.prepare(`SELECT 1 AS ok FROM (${answeredWidgets(member)}) LIMIT 1`).first()) fail(404, 'not_found', 'Customers not found')

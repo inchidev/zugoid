@@ -4,6 +4,7 @@ import { sha256Hex } from '../../shared/server-settings'
 import { newId, nowIso } from '../../shared/ids'
 import type { ZugoidEnv } from '../../workers/env'
 import { browserNameStatement, browserPersonStatements, identityContactTouchStatement, insertConversationStatement, touchConversationStatement } from '../../workers/customer-records'
+import { fanoutStoredMessage } from '../../workers/customer-delivery'
 import { fail } from './cf'
 import { randomToken } from './customer-widgets'
 
@@ -154,5 +155,6 @@ export async function postVisitorMessage(env: ZugoidEnv, widget: PublicWidget, v
         ]
       : [],
   ])
+  await fanoutStoredMessage(env, messageId)
   return { id: messageId, direction: 'inbound', content, authorName: null, createdAt: at }
 }

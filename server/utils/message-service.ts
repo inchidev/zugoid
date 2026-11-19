@@ -1,4 +1,5 @@
 import { and, desc, eq, like, lt, sql } from 'drizzle-orm'
+import { deliveredMessage } from '../../workers/customer-delivery'
 import { z } from 'zod'
 import { messages, users } from '../../drizzle/schema'
 import { extractMentionIds, GROUP_MENTIONS, roleDisplayName } from '../../shared/mentions'
@@ -82,6 +83,7 @@ export async function deleteChannelMessage(env: ZugoidEnv, actor: Membership, id
   const role = messageDeleteRole(row.authorId, access.user.id, { perms: access.perms, mailbox: access.mailPermission !== null })
   if (!role) fail(403, 'forbidden', 'Not your message')
   if (row.deletedAt) return { ok: true }
+  if (await deliveredMessage(env, id)) fail(403, 'forbidden', 'The other side already has this message')
   const pinned = await removeChannelMessage(env, { id, channelId: row.channelId, authorId: row.authorId, actorId: access.user.id,
     serverId: access.serverId, moderator: role === 'moderator', authorization: access.authorization })
   try {
@@ -408,6 +410,7 @@ export async function editChannelMessage(env: ZugoidEnv, actor: Membership, mess
   if (row.deletedAt) fail(409, 'deleted', 'Message was deleted')
   const member = await requireChannelAccessForMember(env, actor, row.channelId, Permission.sendMessages, 'PATCH')
   if (row.authorId !== member.user.id) fail(403, 'forbidden', 'Not your message')
+  if (await deliveredMessage(env, messageId)) fail(403, 'forbidden', 'The other side already has this message')
   const requestedMentions = extractMentionIds(content)
   const mentionIds = requestedMentions.length
     ? ((await env.DB.prepare(`SELECT id FROM users WHERE id IN (${requestedMentions.map(() => '?').join(',')}) AND status = 'active' AND id IN (SELECT user_id FROM space_members WHERE space_id = (SELECT space_id FROM channels WHERE id = ?))`)

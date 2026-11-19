@@ -26,5 +26,6 @@ const onCompanies = computed(() => route.path.startsWith('/customers/companies')
     </ul>
     <LayoutMailNav />
     <LayoutWidgetsNav />
+    <LayoutTelegramNav />
   </div>
 </template>

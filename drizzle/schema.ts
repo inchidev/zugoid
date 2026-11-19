@@ -251,8 +251,7 @@ export const authProviderCredentials = sqliteTable('auth_provider_credentials', 
   secretIv: text('secret_iv').notNull(),
   secretVersion: integer('secret_version').notNull().default(1),
   ...isoTimestamps(),
-}, table => [
-])
+})
 
 /** Immutable published Privacy, Terms, and server Rules bundle. */
 export const onboardingRevisions = sqliteTable('onboarding_revisions', {
@@ -805,16 +804,19 @@ export const customerContacts = sqliteTable('customer_contacts', {
 export const customerIdentities = sqliteTable('customer_identities', {
   spaceId: text('space_id').notNull().default(DEFAULT_SPACE_ID),
   id: text('id').primaryKey(),
-  /** `email`: an address; `browser`: one Visitor's browser on a Widget, proven by its token. */
-  kind: text('kind', { enum: ['email', 'browser'] }).notNull(),
-  /** Normalized: a lowercased email address, or a Visitor's ID. */
+  /**
+   * `email`: an address; `browser`: one Visitor's browser on a Widget, proven by its token;
+   * `telegram`: a Telegram user, proven by Telegram.
+   */
+  kind: text('kind', { enum: ['email', 'browser', 'telegram'] }).notNull(),
+  /** Normalized: a lowercased email address, a Visitor's ID, or a Telegram user's ID. */
   value: text('value').notNull(),
   /** The name it last gave, such as an email's display name. */
   displayName: text('display_name'),
   contactId: text('contact_id').notNull().references(() => customerContacts.id, { onDelete: 'cascade' }),
   verifiedAt: text('verified_at'),
-  /** `sender_auth`: inbound mail from it passed sender authentication. */
-  verifiedBy: text('verified_by', { enum: ['sender_auth'] }),
+  /** `sender_auth`: inbound mail from it passed sender authentication; `telegram`: Telegram named the sender. */
+  verifiedBy: text('verified_by', { enum: ['sender_auth', 'telegram'] }),
   ...isoTimestamps(),
 }, table => [
   uniqueIndex('customer_identities_value_unique').on(table.spaceId, table.kind, table.value),
@@ -863,17 +865,17 @@ export const customerContactCompanies = sqliteTable('customer_contact_companies'
 /**
  * Where Customer Conversations come from: a private channel in Customers. Each kind
  * keeps its own row beside this one (`email_mailboxes` for a Mailbox, `customer_widgets`
- * for a Widget). Its channel members are the team that answers it.
+ * for a Widget, `customer_telegram_bots` for a Telegram bot). Its channel members are the
+ * team that answers it.
  */
 export const customerSources = sqliteTable('customer_sources', {
   channelId: text('channel_id').primaryKey().references(() => channels.id, { onDelete: 'cascade' }),
-  kind: text('kind', { enum: ['mailbox', 'widget'] }).notNull(),
+  kind: text('kind', { enum: ['mailbox', 'widget', 'telegram'] }).notNull(),
   /** An Agent of the Source's Space that answers first. Nothing answers until `first_line_enabled`. */
   firstLineAgentId: text('first_line_agent_id').references(() => users.id, { onDelete: 'set null' }),
   firstLineEnabled: integer('first_line_enabled', { mode: 'boolean' }).notNull().default(false),
   ...isoTimestamps(),
-}, table => [
-])
+})
 
 /** One exchange from one Source: a `conversation` channel under the Source's channel. */
 export const customerConversations = sqliteTable('customer_conversations', {
@@ -884,8 +886,9 @@ export const customerConversations = sqliteTable('customer_conversations', {
   status: text('status', { enum: ['open', 'waiting', 'resolved', 'spam', 'trash'] }).notNull().default('open'),
   assigneeId: text('assignee_id').references(() => users.id, { onDelete: 'set null' }),
   /**
-   * The Identity on the other side when the Source proves one: a Visitor's browser. A Visitor
-   * reads only Conversations of their own Identity, whatever Contact the team joins it into.
+   * The Identity on the other side when the Source proves one: a Visitor's browser, a Telegram
+   * user. A Visitor reads only Conversations of their own Identity, whatever Contact the team
+   * joins it into, and a Telegram reply goes to this Identity's chat.
    */
   identityId: text('identity_id').references(() => customerIdentities.id, { onDelete: 'set null' }),
   lastMessageAt: text('last_message_at').notNull(),
@@ -951,6 +954,55 @@ export const customerWidgetMessages = sqliteTable('customer_widget_messages', {
   createdAt: text('created_at').notNull(),
 }, table => [
   index('customer_widget_messages_conversation_idx').on(table.conversationChannelId, table.messageId),
+])
+
+/**
+ * A Telegram bot: a Source whose people write to the bot in private chats. A database trigger
+ * adds its `customer_sources` row. The token is encrypted with the Server's key. Telegram
+ * calls the Server's webhook with `webhook_secret`, or, for a Server Telegram cannot reach,
+ * the Server asks Telegram for updates.
+ */
+export const customerTelegramBots = sqliteTable('customer_telegram_bots', {
+  channelId: text('channel_id').primaryKey().references(() => customerSources.channelId, { onDelete: 'cascade' }),
+  /** Telegram's ID for the bot: the number before the colon in its token. */
+  botId: text('bot_id').notNull(),
+  username: text('username').notNull(),
+  tokenCiphertext: text('token_ciphertext').notNull(),
+  tokenIv: text('token_iv').notNull(),
+  /** Random; Telegram sends it back in `X-Telegram-Bot-Api-Secret-Token` with every update. */
+  webhookSecret: text('webhook_secret').notNull(),
+  /** `webhook`: Telegram calls the Server; `polling`: the Server asks Telegram. */
+  updates: text('updates', { enum: ['webhook', 'polling'] }).notNull().default('webhook'),
+  /** The Bot API address: Telegram's own, or a Bot API server or proxy the Server can reach. */
+  apiBase: text('api_base').notNull().default('https://api.telegram.org'),
+  /** The next update ID to take; an update below it was already taken. */
+  updateOffset: integer('update_offset').notNull().default(0),
+  /** The first line someone reads after /start. */
+  greeting: text('greeting').notNull().default(''),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  /** What Telegram last refused, in its words, until the next update works. */
+  lastError: text('last_error'),
+  createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+  ...isoTimestamps(),
+}, table => [
+  uniqueIndex('customer_telegram_bots_bot_unique').on(table.botId),
+])
+
+/**
+ * A Telegram message's delivery row. Only messages with one reach Telegram; notes have none.
+ * An outbound one is `pending` until Telegram accepts it (`sent`) or refuses it (`failed`).
+ */
+export const customerTelegramMessages = sqliteTable('customer_telegram_messages', {
+  messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
+  conversationChannelId: text('conversation_channel_id').notNull().references(() => customerConversations.channelId, { onDelete: 'cascade' }),
+  direction: text('direction', { enum: ['inbound', 'outbound'] }).notNull(),
+  status: text('status', { enum: ['received', 'pending', 'sent', 'failed'] }).notNull(),
+  /** Telegram's ID for the message in its chat, once Telegram has one. */
+  telegramMessageId: integer('telegram_message_id'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+}, table => [
+  index('customer_telegram_messages_conversation_idx').on(table.conversationChannelId, table.messageId),
 ])
 
 /** Pending live-file deletion keys survive removal of their mailbox. */
@@ -1853,8 +1905,7 @@ export const gitSetupRequests = sqliteTable('git_setup_requests', {
   status: text('status').notNull(),
   createdAt: text('created_at').notNull(),
   expiresAt: text('expires_at').notNull(),
-}, table => [
-])
+})
 
 export const rolePolicies = sqliteTable('role_policies', {
   roleId: text('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),

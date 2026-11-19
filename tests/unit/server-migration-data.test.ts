@@ -34,7 +34,9 @@ describe(`migration ${files.at(-1)}`, () => {
       db.exec(statements(read(files.at(-1)!)).join('\n'))
       db.exec('COMMIT')
 
-      expect(contents(db)).toEqual(before)
+      const after = contents(db)
+      expect(Object.fromEntries(Object.keys(before).map(table => [table, after[table]]))).toEqual(before)
+      expect(Object.entries(after).filter(([table, rows]) => !(table in before) && rows.length)).toEqual([])
       expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
       expect(db.prepare("SELECT message_id FROM message_search WHERE message_search MATCH 'kept'").all()).toEqual([{ message_id: 'messages.id.0' }])
       expect(schemaDifferences(schemaOf(db), schemaOf(fresh))).toEqual([])

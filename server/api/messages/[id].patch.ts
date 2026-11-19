@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import { deliveredMessage } from '../../../workers/customer-delivery'
 import { z } from 'zod'
 import { messages } from '../../../drizzle/schema'
 import { extractMentionIds } from '../../../shared/mentions'
@@ -26,6 +27,7 @@ export default defineEventHandler(async (event) => {
   if (row.deletedAt) fail(409, 'deleted', 'Message was deleted')
   const member = await requireChannelMember(event, row.channelId, Permission.sendMessages)
   if (row.authorId !== member.user.id) fail(403, 'forbidden', 'Not your message')
+  if (await deliveredMessage(env, id)) fail(403, 'forbidden', 'The other side already has this message')
   const body = parseBody(bodySchema, await readBody(event))
   const editedAt = nowIso()
   const requestedMentions = extractMentionIds(body.content)
