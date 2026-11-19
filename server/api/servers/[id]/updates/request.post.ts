@@ -8,6 +8,8 @@ import { zugoidReleases } from '../../../../utils/releases'
 import { updateCoverage } from '../../../../utils/update-coverage'
 import { parseBody } from '../../../../utils/validate'
 import { writeAudit } from '../../../../utils/messages'
+import { hostUpdaterAlive } from '../../../../utils/host-updates'
+import { isCelld } from '../../../../../shared/server-runtime'
 
 export default defineEventHandler(async (event) => {
   const { env, serverId, member } = await updateOwner(event)
@@ -17,6 +19,8 @@ export default defineEventHandler(async (event) => {
     if (value.job.targetVersion !== body.release.slice(1) || value.job.requestedBy !== member.user.id) fail(409, 'request_conflict', 'This request ID belongs to another update')
     return { job: value.job, launchUrl: await serverUpdateLaunchUrl(env, value.job, getRequestURL(event).origin) }
   }
+  // On a VPS the host runs the update; a request nobody would pick up is refused.
+  if (isCelld(env) && !await hostUpdaterAlive(env)) fail(409, 'host_updater_missing', 'The updater on this Server\'s VPS is not answering, so nothing would run this update.')
   const installed = serverVersion(env)
   if (compareVersions(body.release.slice(1), installed) <= 0) fail(400, 'release_not_newer', 'Choose a release newer than the installed version')
   const coverage = await updateCoverage(env, serverId, getRequestURL(event).origin)

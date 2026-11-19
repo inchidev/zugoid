@@ -83,6 +83,10 @@ export type ZugoidEnv = {
   SES_SNS_TOPIC_ARN?: string
   /** `cloudflare` or `workers` keeps Cloudflare-network features; `celld` is a VPS (shared/server-runtime.ts). */
   ZUGOID_RUNTIME?: string
+  /** A VPS installer Server's host updater proves itself with this (server/utils/host-updates.ts). */
+  ZUGOID_HOST_TOKEN?: string
+  /** The site that sells this Server's subscription: https://zugoid.com, or https://zugoid.ru for a Server bought there. */
+  ZUGOID_SITE?: string
   /** Legacy installer binding; the updater removes it after moving to D1. */
   ZUGOID_EMAIL_DOMAINS?: string
   /** The Server's own Cloudflare account, for update and domain launch URLs. */

@@ -80,11 +80,17 @@ version_newer() {
 fetch() { curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --connect-timeout 20 --max-time 900 --retry 3 "$1" -o "$2"; }
 # zugoid.com offers a Server new releases for its first 30 days, then while its own subscription runs (AGENTS.md).
 # Only the Server's UUID is sent. When zugoid.com cannot be reached, or says nothing readable, nothing is held back.
+# A Server bought on zugoid.ru asks zugoid.ru (ZUGOID_SITE, kept in .env); no other site is asked.
+coverage_site() {
+  local site=${ZUGOID_SITE:-}
+  [[ -n $site || ! -f $dir/.env ]] || site=$(get_env ZUGOID_SITE 2>/dev/null) || site=''
+  case "$site" in https://zugoid.ru) printf '%s' "$site" ;; *) printf 'https://zugoid.com' ;; esac
+}
 coverage_answer() {
   local id=$1
   [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || return 1
   curl --proto '=https' --tlsv1.2 --fail --silent --location --connect-timeout 10 --max-time 20 \
-    -H 'Accept: application/json' -A 'Zugoid update check' "${ZUGOID_SITE:-https://zugoid.com}/api/servers/$id/coverage"
+    -H 'Accept: application/json' -A 'Zugoid update check' "$(coverage_site)/api/servers/$id/coverage"
 }
 require_coverage() {
   local id answer covered message url
@@ -94,7 +100,7 @@ require_coverage() {
   [[ $covered == no ]] || return 0
   message=$(jq -r '.message // "This Server has no Zugoid subscription, so zugoid.com offers it no new release."' <<<"$answer")
   url=$(jq -r '.subscribeUrl // empty' <<<"$answer")
-  [[ $url == https://zugoid.com/* ]] && url="$url&origin=$(jq -rn --arg o "$(get_env PUBLIC_ORIGIN 2>/dev/null)" '$o | @uri')"
+  [[ $url == "$(coverage_site)"/* ]] && url="$url&origin=$(jq -rn --arg o "$(get_env PUBLIC_ORIGIN 2>/dev/null)" '$o | @uri')"
   fail "$message${url:+ Subscribe: $url}"
 }
 check_hash() { [[ $(sha256sum "$2" | cut -d' ' -f1) == "$1" ]] || fail "Checksum mismatch: $(basename "$2"); no installation files or data were changed."; }
@@ -200,7 +206,8 @@ lock_installation() {
   mkdir -p "$lock_dir" || fail 'Cannot create the installer lock directory. Create /run/lock (mode 1777) and retry.'
   chmod 1777 "$lock_dir" 2>/dev/null || true
   exec 9>"$lock_dir/zugoid-$key.lock" || fail 'Cannot open the installer lock. Create /run/lock (mode 1777) and retry.'
-  flock -n 9 || fail 'Another installer/CLI operation is running for this directory.'
+  # The updater timer just tries again later while another operation runs.
+  flock -n 9 || { [[ ${1:-} == quiet ]] && exit 0; fail 'Another installer/CLI operation is running for this directory.'; }
 }
 load_installation() {
   [[ -f $dir/.env && -f $dir/.zugoid-managed ]] || fail "No managed installation in $dir"
@@ -236,7 +243,8 @@ configure_new() {
   # Stage env before creating any installation files. It is not executed as shell.
   : > "$stage/.env"
   local key
-  for key in AUTH_SECRET SETUP_TOKEN RUSTFS_SECRET_KEY; do put_env "$key" "$(openssl rand -hex 32)" "$stage/.env"; done
+  for key in AUTH_SECRET SETUP_TOKEN RUSTFS_SECRET_KEY ZUGOID_HOST_TOKEN; do put_env "$key" "$(openssl rand -hex 32)" "$stage/.env"; done
+  [[ -z ${ZUGOID_SITE:-} ]] || put_env ZUGOID_SITE "$(coverage_site)" "$stage/.env"
   put_env RUSTFS_ACCESS_KEY "zugoid-$(openssl rand -hex 12)" "$stage/.env"
   put_env ZUGOID_PROJECT "$project" "$stage/.env"
   put_env ZUGOID_VERSION "$pinned_version" "$stage/.env"
@@ -515,6 +523,88 @@ rollback() {
   health "$version"
   say "Recovered $version. Backup retained at $backup_result" >&2
 }
+# Updates from the Server's Settings. The Server cannot replace its own image, so this host does: a systemd timer runs
+# `zugoid host-update` every half minute. It asks the Server (with ZUGOID_HOST_TOKEN from .env) whether the Owner
+# requested an update and, if so, runs the same verified upgrade as `zugoid upgrade`, reporting how it went.
+updater_service() { printf 'zugoid-updater-%s' "$project"; }
+ensure_host_token() {
+  [[ -n $(get_env ZUGOID_HOST_TOKEN) ]] || replace_env ZUGOID_HOST_TOKEN "$(openssl rand -hex 32)" "$dir/.env"
+}
+enable_host_updater() {
+  local unit units=${ZUGOID_UNIT_DIR:-/etc/systemd/system}
+  if ! systemd_available; then
+    say 'This host has no systemd, so the Server cannot be updated from its Settings. Update it with: sudo zugoid upgrade'
+    return 0
+  fi
+  unit=$(updater_service)
+  cat > "$stage/$unit.service" <<UNIT
+[Unit]
+Description=Zugoid updates requested from Settings ($project)
+After=docker.service network-online.target
+[Service]
+Type=oneshot
+Environment=ZUGOID_DIR=$dir
+ExecStart=/usr/local/bin/zugoid host-update
+TimeoutStartSec=3h
+UNIT
+  cat > "$stage/$unit.timer" <<UNIT
+[Unit]
+Description=Ask the Zugoid Server whether its Owner requested an update ($project)
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=30s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target
+UNIT
+  install -m 644 "$stage/$unit.service" "$units/$unit.service"
+  install -m 644 "$stage/$unit.timer" "$units/$unit.timer"
+  systemctl daemon-reload
+  systemctl enable --now "$unit.timer" >/dev/null 2>&1 || say "Updates from Settings are not on: systemctl enable --now $unit.timer did not succeed."
+}
+disable_host_updater() {
+  local unit units=${ZUGOID_UNIT_DIR:-/etc/systemd/system}
+  unit=$(updater_service)
+  [[ -f $units/$unit.timer ]] || return 0
+  if systemd_available; then systemctl disable --now "$unit.timer" >/dev/null 2>&1 || true; fi
+  rm -f -- "$units/$unit.timer" "$units/$unit.service"
+  if systemd_available; then systemctl daemon-reload || true; fi
+}
+host_call() {
+  local origin host port token
+  origin=$(get_env PUBLIC_ORIGIN) token=$(get_env ZUGOID_HOST_TOKEN)
+  [[ ${#token} -ge 32 && $origin =~ ^https?://([^/:]+)(:([0-9]+))?$ ]] || return 1
+  host=${BASH_REMATCH[1]} port=${BASH_REMATCH[3]}
+  [[ -n $port ]] || { [[ $origin == https://* ]] && port=443 || port=80; }
+  # The token goes in a header file, never on a command line other users could read.
+  printf 'Authorization: Bearer %s\n' "$token" > "$stage/host-auth"
+  # The Server's own gateway, on this host, at its public name.
+  curl --proto '=https,http' --fail --silent --show-error --connect-timeout 5 --max-time 30 --resolve "$host:$port:127.0.0.1" \
+    -H @"$stage/host-auth" -H 'Content-Type: application/json' -A 'Zugoid host updater' --data-binary "$1" "$origin/api/host/update"
+}
+host_report() {
+  local body
+  body=$(jq -cn --arg id "$1" --arg stage "$2" --arg error "${3:-}" '{action: "report", id: $id, stage: $stage, error: (if $error == "" then null else $error[0:500] end)}')
+  host_call "$body" >/dev/null 2>&1 || true
+}
+host_update() {
+  local answer id target log
+  answer=$(host_call '{"action":"poll"}' 2>/dev/null) || return 0
+  id=$(jq -r '.job.id // empty' <<<"$answer" 2>/dev/null) target=$(jq -r '.job.targetVersion // empty' <<<"$answer" 2>/dev/null)
+  [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ && $target =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || return 0
+  say "The Owner requested $target from Settings."
+  host_report "$id" backing_up
+  # The Owner chose the release, prerelease or not, from the published ones.
+  [[ $target != *-* ]] || channel=prerelease
+  log="$stage/host-update.log"
+  if (trap - EXIT; export ZUGOID_HOST_UPDATE_ID=$id; upgrade_server "$target") > "$log" 2>&1; then
+    cat "$log"
+    host_report "$id" complete
+  else
+    cat "$log"
+    host_report "$id" failed "$(sed -n 's/^zugoid: //p' "$log" | tail -1)"
+  fi
+}
 install_server() {
   preflight
   validate_dir
@@ -527,6 +617,7 @@ install_server() {
     compose_up
     health
     install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+    enable_host_updater
     print_result
     factory_rerun_notice
     return
@@ -557,6 +648,7 @@ install_server() {
   health
   # zugoid.com notes the new Server now, so its 30 free days start at installation.
   coverage_answer "$(get_env SERVER_ID 2>/dev/null)" >/dev/null 2>&1 || true
+  enable_host_updater
   print_result
   enable_optional_factory
 }
@@ -599,6 +691,9 @@ apply_upgrade() {
   # Fetch the helper before stopping the Server; backup/rollback work offline.
   docker image inspect alpine:3.24 >/dev/null 2>&1 || docker pull alpine:3.24 >/dev/null
   backup_stack
+  # An earlier release has no updater token; the Server gets it with this release.
+  ensure_host_token
+  [[ -z ${ZUGOID_HOST_UPDATE_ID:-} ]] || host_report "$ZUGOID_HOST_UPDATE_ID" updating
   local result
   set +e
   (trap - EXIT; set -e; apply_files; compose_up; health)
@@ -606,6 +701,7 @@ apply_upgrade() {
   set -e
   if [[ $result != 0 ]]; then rollback; fail 'Upgrade did not succeed; previous Server restored.'; fi
   install -m 700 "$dir/zugoid" /usr/local/bin/zugoid
+  enable_host_updater
   say "Upgraded $version -> $pinned_version; backup: $backup_result"
   upgrade_factory
 }
@@ -647,6 +743,7 @@ uninstall_server() {
   check_owned_volumes
   if [[ $backup == true ]]; then backup_stack; fi
   if [[ -f $(factory_unit_file) ]] && systemd_available; then systemctl disable --now "$(factory_service)"; fi
+  disable_host_updater
   compose down --remove-orphans >/dev/null
   if [[ $purge == true ]]; then
     for key in rustfs-data celld-data caddy-data caddy-config; do docker volume rm "${project}_$key" >/dev/null; done
@@ -997,7 +1094,7 @@ main() {
     *)
       for option in docker jq curl flock; do need "$option"; done
       load_installation
-      case "$command" in status|logs) ;; *) lock_installation ;; esac
+      case "$command" in status|logs) ;; host-update) lock_installation quiet ;; *) lock_installation ;; esac
       case "$command" in
         status) compose ps; say "Version $version; $(get_env PUBLIC_ORIGIN)" ;;
         logs) compose logs --tail 100 --follow ;;
@@ -1005,6 +1102,7 @@ main() {
         stop) compose stop ;;
         backup) backup_stack ;;
         upgrade) upgrade_server "${1:-}" ;;
+        host-update) [[ $# == 0 ]] || fail 'Usage: zugoid host-update (run by the updater timer)'; host_update ;;
         domain) domain_command "$@" ;;
         compute|factory) factory_command "$@" ;;
         uninstall) uninstall_server "$@" ;;

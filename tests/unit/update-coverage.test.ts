@@ -24,3 +24,13 @@ it('never asks for a partner\'s Server, whose platform delivers its releases, an
   const elsewhere = answer({ covered: false, reason: 'none', freeUntil: null, message: 'x', subscribeUrl: 'https://evil.example/pay' })
   expect((await updateCoverage({}, SERVER, 'https://team.example.com', elsewhere)).subscribeUrl).toBeNull()
 })
+
+it('asks zugoid.ru for a Server bought there, and only zugoid.com or zugoid.ru', async () => {
+  const fetcher = answer({ covered: false, reason: 'none', freeUntil: null, message: 'Нет подписки.', subscribeUrl: `https://zugoid.ru/billing/checkout?server=${SERVER}` })
+  const coverage = await updateCoverage({ ZUGOID_SITE: 'https://zugoid.ru' }, SERVER, 'https://team.example.ru', fetcher)
+  expect(fetcher).toHaveBeenCalledWith(`https://zugoid.ru/api/servers/${SERVER}/coverage`, expect.anything())
+  expect(coverage.subscribeUrl).toBe(`https://zugoid.ru/billing/checkout?server=${SERVER}&origin=https%3A%2F%2Fteam.example.ru`)
+  const other = answer({ covered: true, reason: 'free' })
+  await updateCoverage({ ZUGOID_SITE: 'https://evil.example' }, SERVER, 'https://team.example.com', other)
+  expect(other).toHaveBeenCalledWith(`https://zugoid.com/api/servers/${SERVER}/coverage`, expect.anything())
+})

@@ -4,13 +4,18 @@ import type { ZugoidEnv } from '../../workers/env'
 import { partnerSignInKey } from './partner-signin'
 
 /**
- * Whether zugoid.com offers this Server new releases. Every Server is free for
+ * Whether zugoid.com (or zugoid.ru, for a Server bought there) offers this Server new releases. Every Server is free for
  * its first 30 days; after that its own subscription covers it. The check sends
  * only the Server's UUID. A Server that is not covered keeps working: it is just
  * offered no new release, and Settings says so. When zugoid.com cannot be
  * reached, nothing is held back.
  */
-const SITE = 'https://zugoid.com'
+/** The sites that sell a Server's subscription. A Server bought on zugoid.ru asks zugoid.ru (ZUGOID_SITE). */
+const SITES = ['https://zugoid.com', 'https://zugoid.ru']
+export const coverageSite = (env: Pick<ZugoidEnv, 'ZUGOID_SITE'>) => {
+  const site = env.ZUGOID_SITE?.trim().replace(/\/+$/, '') ?? ''
+  return SITES.includes(site) ? site : SITES[0]!
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 const answer = z.object({
@@ -23,10 +28,11 @@ const answer = z.object({
 
 const unchecked = (reason: UpdateCoverageDTO['reason']): UpdateCoverageDTO => ({ covered: true, reason, freeUntil: null, message: null, subscribeUrl: null })
 
-export async function updateCoverage(env: Pick<ZugoidEnv, 'PARTNER_SIGNIN_KEY'>, serverId: string, origin: string, fetcher: typeof fetch = fetch): Promise<UpdateCoverageDTO> {
+export async function updateCoverage(env: Pick<ZugoidEnv, 'PARTNER_SIGNIN_KEY' | 'ZUGOID_SITE'>, serverId: string, origin: string, fetcher: typeof fetch = fetch): Promise<UpdateCoverageDTO> {
   // A partner's platform made this Server and delivers its releases itself.
   if (partnerSignInKey(env)) return unchecked('partner')
   if (!UUID.test(serverId)) return unchecked('unknown')
+  const SITE = coverageSite(env)
   try {
     const response = await fetcher(`${SITE}/api/servers/${serverId}/coverage`, {
       headers: { Accept: 'application/json', 'User-Agent': 'Zugoid update check' },

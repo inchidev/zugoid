@@ -4,7 +4,8 @@ import { getServerId } from '../../shared/server-id'
 import { SERVER_WORKER_NAME, readServerSetting } from '../../shared/server-settings'
 import { activeUpdate, type UpdateStore } from '../../shared/server-updates'
 import { createUpdateStore } from '../../shared/server-update-store'
-import { isOperatorManaged } from '../../shared/server-runtime'
+import { isCelld, isOperatorManaged } from '../../shared/server-runtime'
+import { hostUpdaterToken } from './host-updates'
 import { cf, fail } from './cf'
 import { requireMember } from './guards'
 
@@ -87,9 +88,11 @@ export async function updateOwner(event: H3Event) {
 
 export function updateStorage(env: ZugoidEnv, _serverId: string): UpdateStore {
   const accountId = env.ACCOUNT_ID?.trim() || env.ZUGOID_ACCOUNT_ID?.trim()
-  if ((!env.FILES && !env.TICKETS) || !accountId || isOperatorManaged(env)) fail(409, 'updates_unavailable', 'Updates require storage and a published Zugoid Server release. VPS operators use zugoid upgrade.')
+  // A VPS Server keeps the request for its host updater; one without the updater is updated where it is deployed.
+  const host = isCelld(env) && Boolean(hostUpdaterToken(env))
+  if (!host && ((!env.FILES && !env.TICKETS) || !accountId || isOperatorManaged(env))) fail(409, 'updates_unavailable', 'Updates require storage and a published Zugoid Server release.')
   // Reads must start on the primary so a fresh request cannot miss an active Build.
-  const database = env.DB.withSession('first-primary')
+  const database = typeof env.DB.withSession === 'function' ? env.DB.withSession('first-primary') : env.DB
   return createUpdateStore(async (sql, params) => (await database.prepare(sql).bind(...params).all<{ payload: string; revision: number }>()).results)
 }
 

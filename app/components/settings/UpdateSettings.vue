@@ -24,7 +24,7 @@ const updateQ = useQuery({
 const status = computed(() => updateQ.data.value)
 const progressQ = useQuery({
   queryKey: computed(() => ['update-progress', props.serverId]),
-  queryFn: () => api<{ installedVersion: string; configured: boolean; mode?: 'build' | 'installer'; job: ServerUpdateJob | null; buildUrl?: string | null; launchUrl?: string | null }>(`/api/servers/${props.serverId}/updates/progress`),
+  queryFn: () => api<{ installedVersion: string; configured: boolean; mode?: 'build' | 'installer' | 'host'; job: ServerUpdateJob | null; buildUrl?: string | null; launchUrl?: string | null }>(`/api/servers/${props.serverId}/updates/progress`),
   enabled: computed(() => status.value?.updateControl?.available === true),
   staleTime: 0,
   refetchInterval: query => activeUpdate(query.state.data?.job ?? null) ? 4000 : false,
@@ -110,6 +110,9 @@ async function run() {
 const coverage = computed(() => status.value?.coverage ?? null)
 const uncovered = computed(() => coverage.value?.covered === false)
 const freeUntil = computed(() => (coverage.value?.reason === 'free' && coverage.value.freeUntil ? new Date(coverage.value.freeUntil).toLocaleDateString(undefined, { dateStyle: 'medium' }) : ''))
+// A VPS Server: its host's updater runs the update, with the same backup and rollback as zugoid upgrade.
+const hostMode = computed(() => status.value?.updateControl?.mode === 'host')
+const subscribeLabel = computed(() => { try { return `Subscribe on ${new URL(coverage.value?.subscribeUrl ?? '').host}` } catch { return 'Subscribe' } })
 const needsDownload = computed(() => status.value?.updateControl?.backupDestination === 'download' && !job.value?.backup?.verified)
 </script>
 
@@ -146,12 +149,14 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
             </li>
           </ol>
           <p v-if="job.stage === 'complete'" class="text-sm text-muted">Updated from {{ job.sourceVersion }} · {{ formatDateTime(job.updatedAt) }}</p>
+          <p v-else-if="job.stage === 'queued' && hostMode" class="text-sm text-muted">The request is saved. The updater on this Server's VPS starts it within a minute.</p>
+          <p v-else-if="hostMode && active" class="text-sm text-muted">The VPS backs up the Server, installs the verified release and checks it; if anything fails, it restores the previous Server. The Server is offline for a few minutes. You can close this page and check back later.</p>
           <p v-else-if="job.stage === 'queued'" class="text-sm text-muted">{{ selfMode ? 'The request is saved. Start it here; this Server runs the update itself.' : 'The request is saved on this Server. Continue on zugoid.com to authorize Cloudflare for this one update.' }}</p>
           <p v-else-if="selfRun && active" class="text-sm text-muted">This Server is updating itself. You can close this page and check back later.</p>
           <p v-else-if="job.stage === 'backing_up'" class="text-sm text-muted">Keep Server activity low while the database and files are archived.</p>
           <p v-if="job.backup" class="text-sm text-muted" :title="job.backup.key">{{ job.backup.verified ? 'Backup verified' : 'Backup uploaded' }} · {{ formatBytes(job.backup.sizeBytes) }} · {{ formatDateTime(job.backup.createdAt) }}</p>
           <UAlert v-if="job.error" :color="job.stage === 'attention' ? 'warning' : 'error'" :title="job.error" />
-          <UAlert v-if="progressQ.error.value && active" color="warning" title="Waiting for the Server" :description="selfRun ? 'The Server may be switching to the new version. Refresh in a minute.' : 'The update may still be running. Open zugoid.com to check its progress before starting another update.'" />
+          <UAlert v-if="progressQ.error.value && active" color="warning" title="Waiting for the Server" :description="selfRun || hostMode ? 'The Server may be switching to the new version. Refresh in a minute.' : 'The update may still be running. Open zugoid.com to check its progress before starting another update.'" />
           <UAlert v-if="$pwa?.error?.value" color="warning" :title="$pwa.error.value" />
           <div class="flex flex-wrap gap-2">
             <UButton v-if="job.stage === 'complete' && ($pwa?.waiting.value || staleClient)" :label="`Load the ${installed} interface`" icon="i-ph-arrow-clockwise" data-client-update-action :loading="$pwa?.updating.value" @click="loadClient" />
@@ -166,7 +171,7 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
       <template v-if="!status.updateControl?.available">
         <UAlert color="neutral" title="Updates are managed outside Zugoid" :description="status.updateControl?.reason || 'Use your deployment operator to update this Server.'" />
         <p v-if="status.updateAvailable && status.latestRelease" class="text-sm text-muted">Zugoid {{ status.latestRelease.tagName }} is available. <a :href="status.latestRelease.url" target="_blank" rel="noopener noreferrer" class="underline">Release notes</a></p>
-        <p v-else-if="uncovered" class="text-sm text-muted">{{ coverage?.message }} <a v-if="coverage?.subscribeUrl" :href="coverage.subscribeUrl" target="_blank" rel="noopener" class="underline">Subscribe on zugoid.com</a></p>
+        <p v-else-if="uncovered" class="text-sm text-muted">{{ coverage?.message }} <a v-if="coverage?.subscribeUrl" :href="coverage.subscribeUrl" target="_blank" rel="noopener" class="underline">{{ subscribeLabel }}</a></p>
       </template>
       <template v-else>
         <section class="space-y-4">
@@ -177,7 +182,7 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
             color="warning"
             title="No new release for this Server"
             :description="coverage?.message || 'This Server has no Zugoid subscription, so zugoid.com offers it no new release. It keeps working as it is.'"
-            :actions="coverage?.subscribeUrl ? [{ label: 'Subscribe on zugoid.com', to: coverage.subscribeUrl, target: '_blank', rel: 'noopener', trailingIcon: 'i-ph-arrow-up-right' }] : []"
+            :actions="coverage?.subscribeUrl ? [{ label: subscribeLabel, to: coverage.subscribeUrl, target: '_blank', rel: 'noopener', trailingIcon: 'i-ph-arrow-up-right' }] : []"
           />
           <template v-else-if="choices.length && !active">
             <UFormField label="Release" description="Only published releases newer than the installed version can be selected.">
@@ -186,7 +191,7 @@ const needsDownload = computed(() => status.value?.updateControl?.backupDestinat
             <a v-if="selectedRelease" :href="selectedRelease.url" target="_blank" rel="noopener noreferrer" class="text-sm underline">View {{ selectedRelease.tagName }} release notes</a>
             <!-- Release notes are Markdown; the release title repeats the version, so it is dropped. -->
             <div v-if="selectedRelease?.notes" class="release-notes max-h-72 overflow-y-auto rounded-md border border-default p-3 text-sm text-muted"><ChatMarkdownView :content="selectedRelease.notes.replace(/^#\s+[^\n]*\n+/u, '')" /></div>
-            <p class="text-sm text-muted">{{ status.updateControl?.backupDestination === 'download' ? 'Download a backup of the database and files to your computer before continuing in the installer.' : 'Database and files are saved to the separate backup bucket and verified before the update.' }} Existing Accounts, UUID and storage are kept.</p>
+            <p class="text-sm text-muted">{{ status.updateControl?.backupDestination === 'host' ? 'The VPS saves a complete backup in its backup directory first, and restores it if the update does not succeed.' : status.updateControl?.backupDestination === 'download' ? 'Download a backup of the database and files to your computer before continuing in the installer.' : 'Database and files are saved to the separate backup bucket and verified before the update.' }} Existing Accounts, UUID and storage are kept.</p>
             <UButton label="Back up and update" icon="i-ph-cloud-arrow-up" :loading="busy" :disabled="active || !selectedRelease" @click="start" />
           </template>
           <p v-if="freeUntil && !active" class="text-sm text-muted">Every Server is free for its first 30 days. This one gets new releases until {{ freeUntil }}; after that a <a v-if="coverage?.subscribeUrl" :href="coverage.subscribeUrl" target="_blank" rel="noopener" class="underline">subscription</a><template v-else>subscription</template> keeps them coming.</p>
