@@ -38,7 +38,7 @@ Migrations only go forward. There is no automatic downgrade. To go back, restore
 | Server | How to update |
 | --- | --- |
 | Cloudflare | **Server settings → Deployment → Updates** in the Server. |
-| VPS installer | `sudo zugoid upgrade` on the VPS. |
+| VPS installer | **Server settings → Deployment → Updates** in the Server, or `sudo zugoid upgrade` on the VPS. |
 | Docker Compose | Set a newer image in `ZUGOID_IMAGE` and restart the stack. |
 | Coolify | Redeploy with `latest`, or change `ZUGOID_VERSION`. |
 
@@ -57,7 +57,7 @@ The update keeps the Server's bindings, secrets, UUID and Durable Objects. See [
 
 ### VPS installer
 
-`sudo zugoid upgrade` installs the latest stable release, if zugoid.com offers this Server new releases (see [Subscription and updates](#subscription-and-updates)); otherwise it stops before downloading anything and prints a link to subscribe. It takes a mandatory backup first and restores the previous version and data if the new one fails to start. See [VPS](../self-host/vps.md#upgrade).
+The Owner chooses a release in **Server settings → Deployment → Updates**, as on Cloudflare; the updater on the VPS runs the upgrade within a minute and Settings shows how it goes. `sudo zugoid upgrade` does the same from the terminal. Either way it installs the release only if zugoid.com offers this Server new releases (see [Subscription and updates](#subscription-and-updates)); otherwise it stops before downloading anything and prints a link to subscribe. It takes a mandatory backup first and restores the previous version and data if the new one fails to start. See [VPS](../self-host/vps.md#upgrade).
 
 ### Docker Compose and Coolify
 

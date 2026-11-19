@@ -53,3 +53,43 @@ it('refuses an upgrade zugoid.com does not offer this Server, says why, and hold
   expect(offline.stdout).toContain('continued')
   expect(run('not json').stdout).toContain('continued')
 })
+
+it('asks zugoid.ru only for a Server bought there, and no other site', () => {
+  const source = readFileSync('self-host/install/install.sh', 'utf8').replace(/main "\$@"\n$/, '')
+  const directory = mkdtempSync(join(tmpdir(), 'zugoid-site-'))
+  try {
+    const site = (value: string) => {
+      writeFileSync(join(directory, '.env'), `ZUGOID_SITE='${value}'\n`)
+      return spawnSync('bash', ['-c', `${source}\ndir='${directory}'\ncoverage_site`], { encoding: 'utf8' }).stdout
+    }
+    expect(site('https://zugoid.ru')).toBe('https://zugoid.ru')
+    expect(site('https://evil.example')).toBe('https://zugoid.com')
+    expect(site('')).toBe('https://zugoid.com')
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+it('runs the update the Owner requested in Settings and reports how it went', () => {
+  const source = readFileSync('self-host/install/install.sh', 'utf8').replace(/main "\$@"\n$/, '')
+  const directory = mkdtempSync(join(tmpdir(), 'zugoid-host-update-'))
+  try {
+    const id = '22222222-2222-4222-8222-222222222222'
+    const run = (poll: string, upgrade: string) => spawnSync('bash', ['-c', `${source}
+stage='${directory}' channel=stable
+host_call() { if [[ $1 == *poll* ]]; then printf '%s' '${poll}'; else printf 'REPORT %s\\n' "$1" >> '${directory}/reports'; fi; }
+upgrade_server() { printf 'zugoid: upgrading to %s for %s on %s\\n' "$1" "$ZUGOID_HOST_UPDATE_ID" "$channel"; ${upgrade}; }
+rm -f '${directory}/reports'; host_update; cat '${directory}/reports' 2>/dev/null`], { encoding: 'utf8' })
+    const done = run(JSON.stringify({ job: { id, targetVersion: '0.3.1' } }), 'return 0')
+    expect(done.stdout).toContain(`upgrading to 0.3.1 for ${id} on stable`)
+    expect(done.stdout).toMatch(/REPORT .*"stage":"backing_up"/)
+    expect(done.stdout).toMatch(/REPORT .*"stage":"complete"/)
+    const failed = run(JSON.stringify({ job: { id, targetVersion: '0.4.0-rc.1' } }), "fail 'Checksum mismatch: install.sh'")
+    expect(failed.stdout).toContain('on prerelease')
+    expect(failed.stdout).toMatch(/REPORT .*"stage":"failed","error":"Checksum mismatch: install.sh"/)
+    // Nothing requested, or something that is not a release, runs nothing.
+    for (const poll of [JSON.stringify({ job: null }), JSON.stringify({ job: { id, targetVersion: '0.3.1; rm -rf /' } })]) {
+      const idle = run(poll, 'return 0')
+      expect(idle.stdout).not.toContain('upgrading')
+      expect(idle.stdout).not.toContain('REPORT')
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})

@@ -115,6 +115,8 @@ Scheduled backups are not supported yet. Run `zugoid backup` yourself or from yo
 
 ## Upgrade
 
+The Owner updates the Server from **Server settings → Deployment → Updates**: choose a newer release and select **Back up and update**. A small updater the installer adds to the VPS (a systemd timer, `zugoid-updater-<project>`) asks the Server every half minute whether an update was requested, and runs the same upgrade as the command below. Settings shows its progress; the Server is offline for a few minutes while it restarts. The updater talks only to its own Server, with a token kept in `.env`, and installs only a published release the Owner chose. On a host without systemd, or to update from the terminal:
+
 ```bash
 sudo zugoid upgrade                                         # latest stable release
 sudo env ZUGOID_CHANNEL=prerelease zugoid upgrade <version>   # a named prerelease
@@ -131,7 +133,7 @@ An upgrade:
 
 If startup or discovery fails, it stops the failed stack, restores the previous Compose files, `.env`, CLI and all four volumes, and checks the old version again. The old image stays on the machine. Expect a short outage, because a single node restarts. If the rollback itself fails, the backup is kept and the command fails; read `zugoid logs` before you change anything else.
 
-Automatic updates are not supported yet.
+A Server installed before 0.3.0 has no updater yet: run `sudo zugoid upgrade` once, and every later update can come from Settings. Updates never install on their own; the Owner chooses each one.
 
 ## Restore
 
@@ -162,6 +164,7 @@ Inputs apply on first install. Reruns keep the saved values.
 | Input | Default and meaning |
 | --- | --- |
 | `ZUGOID_DOMAIN` | Required on first install. Domain without scheme or path. |
+| `ZUGOID_SITE` | `https://zugoid.ru` for a Server whose subscription is bought on zugoid.ru. Otherwise unset: updates ask zugoid.com. |
 | `ZUGOID_ADMIN_USERNAME` | Username of the first Owner. Defaults to `owner`. |
 | `ZUGOID_ADMIN_PASSWORD` | Optional, at least 12 characters. Creates the first Owner with this password, so no claim link is printed. It is stored in `.env`; change it after signing in. |
 | `PUBLIC_ORIGIN`, `ZUGOID_ORIGINS` | Primary origin and comma-separated aliases. Managed by `zugoid domain`; do not edit by hand. |

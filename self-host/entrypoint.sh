@@ -136,6 +136,9 @@ put_var() {
 put_var PUBLIC_ORIGIN
 put_var ZUGOID_ORIGINS
 put_var SERVER_ID
+# The VPS installer's host updater (server/utils/host-updates.ts) and the site that sells this Server's subscription.
+put_var ZUGOID_HOST_TOKEN
+put_var ZUGOID_SITE
 put_var AUTH_SECRET
 put_var ADMIN_USERNAME
 # With ADMIN_PASSWORD the first start creates the Owner and skips the setup claim.

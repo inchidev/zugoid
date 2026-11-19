@@ -59,6 +59,8 @@ sudo zugoid domain primary chat.example.com
 sudo zugoid domain remove old.example.com
 ```
 
+The Owner normally updates from Settings: the installer adds `zugoid-updater-<project>.timer`, which runs `zugoid host-update` every 30 s. It asks `POST /api/host/update` with `ZUGOID_HOST_TOKEN` (generated into `.env`, sent from a header file, never on a command line) whether an update was requested, then runs `zugoid upgrade <version>` under the same lock and reports its stages. A held lock means another operation runs; the timer tries again. `zugoid uninstall` removes the timer. Without systemd there is no updater, and `zugoid upgrade` is the way. See [Server updates](server-updates.md).
+
 `zugoid doctor` checks the saved configuration without printing secret values, the local Docker daemon, RustFS/Server/gateway status, database and migration readiness, and discovery at every configured address. Discovery must match the saved UUID and installed version. HTTPS requests verify the certificate; DNS, connection, timeout and TLS failures have separate messages. An unclaimed Server is healthy when its database is usable. Exit status is 0 when all checks pass and 1 on a failed check. Commands and network requests have timeouts. Doctor never repairs configuration, starts containers, installs packages or takes a backup; only its temporary diagnostic files are created and removed. Run it with sudo, and use the same `ZUGOID_DIR` as installation. A successful request from the VPS does not prove access from another network or backup recoverability.
 
 The Server container runs as UID/GID 10001 with a read-only root filesystem, all Linux capabilities dropped and privilege escalation disabled. Only its celld volume and a bounded 256 MiB `/tmp` are writable; generated configuration lives in `/tmp/zugoid`, with application and migration paths referring to the read-only image. A short-lived, network-disabled permissions service prepares the existing celld volume before startup, including volumes from older root-running releases and restored backups. The installer still needs root to manage Docker and private installation files.
@@ -89,6 +91,7 @@ sudo zugoid uninstall --purge            # additionally removes this Server's li
 | Input | Default / meaning |
 | --- | --- |
 | `ZUGOID_DOMAIN` | Required on first install. Domain without scheme/path. |
+| `ZUGOID_SITE` | `https://zugoid.ru` for a Server bought on zugoid.ru, kept in `.env`; anything else means zugoid.com. Which site the update check asks about coverage. |
 | `ZUGOID_ADMIN_USERNAME` | First Owner's username. Defaults to `owner`. |
 | `ZUGOID_ADMIN_PASSWORD` | Optional (>= 12 characters). Written to `.env` as `ADMIN_PASSWORD`; the first start creates the owner and no claim is printed. |
 | `PUBLIC_ORIGIN`, `ZUGOID_ORIGINS` | Primary origin and comma-separated aliases. Managed by `zugoid domain`; do not edit by hand. |

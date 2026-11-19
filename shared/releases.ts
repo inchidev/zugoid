@@ -30,8 +30,10 @@ export type UpdateStatusDTO = {
   updateControl?: {
     available: boolean
     configured: boolean
-    mode?: 'build' | 'installer'
-    backupDestination?: 'bucket' | 'download'
+    /** `host`: a VPS Server whose host updater runs the update (server/utils/host-updates.ts). */
+    mode?: 'build' | 'installer' | 'host'
+    /** `host`: the VPS host's backup directory, where `zugoid upgrade` keeps its backup. */
+    backupDestination?: 'bucket' | 'download' | 'host'
     source: 'binding' | 'saved' | null
     job: import('./server-updates').ServerUpdateJob | null
     buildUrl?: string | null

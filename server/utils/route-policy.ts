@@ -127,6 +127,7 @@ export const ROUTE_POLICIES: Readonly<Record<string, RoutePolicy>> = {
   'code-environments/index.post': inActiveSpace('environment.create'),
   'code-environments/repositories.get': inActiveSpace('environment.read'),
   'compute-agent/local-pair.post': unscoped('compute-agent-local-pair.create'),
+  'host/update.post': unscoped('host-update.report'),
   'compute-agent/pair.post': unscoped('compute-agent-pair.create'),
   'compute-agent/poll.post': unscoped('compute-agent-poll.create'),
   'compute-agent/publish/[...path]': unscoped('compute-agent-publish.any'),
