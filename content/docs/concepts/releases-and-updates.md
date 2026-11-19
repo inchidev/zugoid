@@ -57,7 +57,7 @@ The update keeps the Server's bindings, secrets, UUID and Durable Objects. See [
 
 ### VPS installer
 
-`sudo zugoid upgrade` installs the latest stable release. It takes a mandatory backup first and restores the previous version and data if the new one fails to start. See [VPS](../self-host/vps.md#upgrade).
+`sudo zugoid upgrade` installs the latest stable release, if zugoid.com offers this Server new releases (see [Subscription and updates](#subscription-and-updates)); otherwise it stops before downloading anything and prints a link to subscribe. It takes a mandatory backup first and restores the previous version and data if the new one fails to start. See [VPS](../self-host/vps.md#upgrade).
 
 ### Docker Compose and Coolify
 

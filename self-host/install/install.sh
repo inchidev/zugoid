@@ -78,6 +78,25 @@ version_newer() {
     ($next | key) > ($old | key)' >/dev/null
 }
 fetch() { curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --connect-timeout 20 --max-time 900 --retry 3 "$1" -o "$2"; }
+# zugoid.com offers a Server new releases for its first 30 days, then while its own subscription runs (AGENTS.md).
+# Only the Server's UUID is sent. When zugoid.com cannot be reached, or says nothing readable, nothing is held back.
+coverage_answer() {
+  local id=$1
+  [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || return 1
+  curl --proto '=https' --tlsv1.2 --fail --silent --location --connect-timeout 10 --max-time 20 \
+    -H 'Accept: application/json' -A 'Zugoid update check' "${ZUGOID_SITE:-https://zugoid.com}/api/servers/$id/coverage"
+}
+require_coverage() {
+  local id answer covered message url
+  id=$(get_env SERVER_ID 2>/dev/null) || id=''
+  answer=$(coverage_answer "$id") || { say 'Could not ask zugoid.com about this Server; continuing.'; return 0; }
+  covered=$(jq -r 'if .covered == false then "no" elif .covered == true then "yes" else "" end' <<<"$answer" 2>/dev/null) || covered=''
+  [[ $covered == no ]] || return 0
+  message=$(jq -r '.message // "This Server has no Zugoid subscription, so zugoid.com offers it no new release."' <<<"$answer")
+  url=$(jq -r '.subscribeUrl // empty' <<<"$answer")
+  [[ $url == https://zugoid.com/* ]] && url="$url&origin=$(jq -rn --arg o "$(get_env PUBLIC_ORIGIN 2>/dev/null)" '$o | @uri')"
+  fail "$message${url:+ Subscribe: $url}"
+}
 check_hash() { [[ $(sha256sum "$2" | cut -d' ' -f1) == "$1" ]] || fail "Checksum mismatch: $(basename "$2"); no installation files or data were changed."; }
 manifest_hash() {
   local name=$1 hash
@@ -536,6 +555,8 @@ install_server() {
   say 'Starting standalone Server and checking its public origin.'
   compose_up
   health
+  # zugoid.com notes the new Server now, so its 30 free days start at installation.
+  coverage_answer "$(get_env SERVER_ID 2>/dev/null)" >/dev/null 2>&1 || true
   print_result
   enable_optional_factory
 }
@@ -551,6 +572,7 @@ upgrade_server() {
   [[ $requested != *-* || $channel == prerelease ]] || fail 'Set ZUGOID_CHANNEL=prerelease to select a prerelease.'
   [[ $requested != "$current" ]] || { say "Already on $current"; return; }
   version_newer "$requested" "$current" || fail 'Downgrades or invalid versions are refused; restore a complete backup instead.'
+  require_coverage
   release_metadata "$requested"
   validate_metadata "$requested"
   local hash
@@ -567,6 +589,8 @@ apply_upgrade() {
   [[ $version != "$pinned_version" ]] || fail 'Already installed'
   # The installed CLI checks SemVer and downloads this pinned script. Recheck here.
   version_newer "$pinned_version" "$version" || fail 'Downgrades are refused'
+  # The CLI of an older release does not ask, so the release being applied asks again.
+  require_coverage
   verified_payload
   validate_payload_metadata
   ensure_docker
