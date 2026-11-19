@@ -188,7 +188,9 @@ type ConversationRow = Omit<CustomerSourceConversationDTO, 'contactName'> & { co
 
 const conversationColumns = `cv.channel_id AS channelId, cv.source_channel_id AS sourceChannelId, cv.contact_id AS contactId,
   ct.name AS contactName, cv.status, cv.assignee_id AS assigneeId, cv.last_message_at AS lastMessageAt,
-  coalesce((SELECT substr(m.content, 1, 200) FROM messages m WHERE m.channel_id = cv.channel_id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1), '') AS preview`
+  coalesce((SELECT CASE WHEN trim(m.content) <> '' THEN substr(m.content, 1, 200)
+      WHEN EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id) THEN 'Sent a file' ELSE '' END
+    FROM messages m WHERE m.channel_id = cv.channel_id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1), '') AS preview`
 
 function conversationDto(row: ConversationRow): CustomerSourceConversationDTO {
   return { ...row, contactName: row.contactName ?? 'Unknown' }

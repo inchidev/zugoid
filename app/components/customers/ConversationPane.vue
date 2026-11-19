@@ -32,8 +32,10 @@ const membersQ = useQuery({
   enabled: computed(() => Boolean(props.serverId)),
 })
 const members = computed(() => membersQ.data.value?.members ?? [])
+// A select item cannot have an empty value.
+const UNASSIGNED = 'unassigned'
 const assigneeItems = computed(() => [
-  { value: '', label: 'Unassigned' },
+  { value: UNASSIGNED, label: 'Unassigned' },
   ...members.value.map(member => ({ value: member.user.id, label: member.nickname || member.user.displayName })),
 ])
 const statusItems: Array<{ value: CustomerConversationStatus; label: string }> = [
@@ -54,8 +56,8 @@ const status = computed({
   set: (value: CustomerConversationStatus) => { void update({ status: value }) },
 })
 const assignee = computed({
-  get: () => detail.value?.conversation.assigneeId ?? '',
-  set: (value: string) => { void update({ assigneeId: value || null }) },
+  get: () => detail.value?.conversation.assigneeId ?? UNASSIGNED,
+  set: (value: string) => { void update({ assigneeId: value === UNASSIGNED ? null : value }) },
 })
 
 const { send, retry } = useChannelSocket(computed(() => props.conversationId))
