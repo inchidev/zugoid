@@ -16,7 +16,7 @@ export function dataTables(db) {
 /** Values a CHECK names for a column, as in `status in ('pending', 'active')` or `version = 'server-v2'`. */
 function namedValues(sql) {
   const values = new Map()
-  for (const match of sql.matchAll(/[`"]?(\w+)[`"]?\s+in\s*\(((?:\s*(?:'[^']*'|-?\d+)\s*,?)+)\)/giu)) {
+  for (const match of sql.matchAll(/[`"]?(\w+)[`"]?\s+in\s*\(\s*((?:'[^']*'|-?\d+)(?:\s*,\s*(?:'[^']*'|-?\d+))*)\s*\)/giu)) {
     values.set(match[1], [...match[2].matchAll(/'([^']*)'|(-?\d+)/gu)].map(value => value[1] ?? Number(value[2])))
   }
   for (const match of sql.matchAll(/[`"]?(\w+)[`"]?\s*=\s*'([^']*)'/gu)) if (!values.has(match[1])) values.set(match[1], [match[2]])

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, ftruncateSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
@@ -203,6 +203,15 @@ export function schemaDifferences(left, right) {
 
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
 
+/** A descriptor for writing an existing file, or null when there is none. */
+function openExisting(file) {
+  try { return openSync(file, 'r+') }
+  catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
 function main() {
   const argument = (flag) => {
     const index = process.argv.indexOf(flag)
@@ -245,9 +254,12 @@ function main() {
     const run = spawnSync('pnpm', ['exec', 'drizzle-kit', 'generate', '--name', slug], { cwd: root, encoding: 'utf8' })
     const number = String(released.length).padStart(4, '0')
     const file = join(root, directory, `${number}_${slug}.sql`)
-    if (!existsSync(file)) {
+    // Open the file drizzle-kit wrote and overwrite it through that handle, so nothing can swap it in between.
+    let handle = openExisting(file)
+    if (handle === null) {
       const custom = spawnSync('pnpm', ['exec', 'drizzle-kit', 'generate', '--custom', '--name', slug], { cwd: root, encoding: 'utf8' })
-      if (!existsSync(file)) throw new Error(`drizzle-kit wrote no ${relative(root, file)}\n${run.stdout}${run.stderr}${custom.stdout}${custom.stderr}`)
+      handle = openExisting(file)
+      if (handle === null) throw new Error(`drizzle-kit wrote no ${relative(root, file)}\n${run.stdout}${run.stderr}${custom.stdout}${custom.stderr}`)
     }
     const header = [
       `-- Written by scripts/generate-migration.mjs from drizzle/schema.ts. Rerun it; do not edit.`,
@@ -255,7 +267,9 @@ function main() {
       plan.rebuilt.length > plan.direct.length ? `-- Rebuilt with them, as they reference them: ${plan.rebuilt.filter(name => !plan.direct.includes(name)).join(', ')}` : '',
       plan.added.length ? `-- New: ${plan.added.join(', ')}` : '',
     ].filter(Boolean).join('\n')
-    writeFileSync(file, `${header}\n${plan.sql.join('\n--> statement-breakpoint\n')}\n`)
+    ftruncateSync(handle, 0)
+    writeSync(handle, `${header}\n${plan.sql.join('\n--> statement-breakpoint\n')}\n`, 0)
+    closeSync(handle)
 
     // The released chain plus this file must create exactly what a fresh baseline creates.
     const migrated = databaseFrom([...released, `${number}_${slug}.sql`].map(name => readFileSync(join(root, directory, name), 'utf8')))
