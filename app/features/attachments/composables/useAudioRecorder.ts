@@ -2,6 +2,11 @@ import { audioFileExtension, MAX_AUDIO_RECORDING_MS, pcm16Wav, selectAudioRecord
 
 type AudioRecorderOptions = {
   onRecorded: (file: File) => void
+  /**
+   * Keep the browser's compressed recording instead of WAV for speech models: a voice
+   * message sent outside, as to Telegram, has to stay a voice message.
+   */
+  compressed?: () => boolean
   onError: (message: string) => void
   onLimit: () => void
 }
@@ -113,7 +118,7 @@ export function useAudioRecorder(options: AudioRecorderOptions) {
         const shouldKeep = !cancelled && blob.size > 0 && !disposed
         reset()
         if (!shouldKeep) return
-        const wav = await speechWav(blob)
+        const wav = options.compressed?.() ? null : await speechWav(blob)
         if (disposed) return
         const type = wav ? 'audio/wav' : recorded
         const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z')

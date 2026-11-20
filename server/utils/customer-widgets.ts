@@ -1,10 +1,9 @@
-import type { CustomerConversationDetailDTO, CustomerConversationStatus, CustomerMessageDTO, CustomerWidgetConversationDTO, CustomerWidgetDTO } from '../../shared/types'
+import type { CustomerConversationDetailDTO, CustomerConversationStatus, CustomerSourceConversationDTO, CustomerSourceKind, CustomerWidgetDTO } from '../../shared/types'
 import { CUSTOMER_VISITOR_USER_ID, normalizeWidgetSite, WIDGET_LIMITS, widgetEmbedCode } from '../../shared/customer-widgets'
 import { newId, nowIso } from '../../shared/ids'
 import { hasPermission, Permission } from '../../shared/permissions'
 import { spaceSql } from '../../shared/spaces'
 import type { ZugoidEnv } from '../../workers/env'
-import { identityContactTouchStatement, touchConversationStatement } from '../../workers/customer-records'
 import type { ServerMembership } from './channel-access'
 import { fail } from './cf'
 import { readableSources, writableSources } from './customers'
@@ -103,8 +102,8 @@ export async function readCustomerWidget(env: ZugoidEnv, member: ServerMembershi
   return { widget: widgetDto(row, member, serverOrigin), memberIds: (members.results ?? []).map(item => item.id) }
 }
 
-/** The author of Visitors' messages exists once a Server has a Widget. */
-function visitorAuthorStatement(env: ZugoidEnv, at: string) {
+/** The author of messages from outside exists once a Server has a Widget or a Telegram bot. */
+export function visitorAuthorStatement(env: ZugoidEnv, at: string) {
   return env.DB.prepare(
     `INSERT INTO users (id, kind, handle, display_name, avatar_r2_key, status, role_id, nickname, joined_at, created_at, updated_at)
      VALUES (?, 'human', NULL, 'Visitor', NULL, 'removed', NULL, NULL, NULL, ?, ?)
@@ -113,7 +112,7 @@ function visitorAuthorStatement(env: ZugoidEnv, at: string) {
 }
 
 /** Active Members of the Space, out of the given IDs. */
-async function spaceMemberIds(env: ZugoidEnv, spaceId: string, ids: string[]): Promise<Set<string>> {
+export async function spaceMemberIds(env: ZugoidEnv, spaceId: string, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set()
   const rows = await env.DB.prepare(
     `SELECT u.id FROM users u JOIN space_members m ON m.user_id = u.id
@@ -185,20 +184,22 @@ export async function setCustomerWidgetMembers(env: ZugoidEnv, member: ServerMem
   ])
 }
 
-type ConversationRow = Omit<CustomerWidgetConversationDTO, 'contactName'> & { contactName: string | null }
+type ConversationRow = Omit<CustomerSourceConversationDTO, 'contactName'> & { contactName: string | null }
 
 const conversationColumns = `cv.channel_id AS channelId, cv.source_channel_id AS sourceChannelId, cv.contact_id AS contactId,
   ct.name AS contactName, cv.status, cv.assignee_id AS assigneeId, cv.last_message_at AS lastMessageAt,
-  coalesce((SELECT substr(m.content, 1, 200) FROM messages m WHERE m.channel_id = cv.channel_id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1), '') AS preview`
+  coalesce((SELECT CASE WHEN trim(m.content) <> '' THEN substr(m.content, 1, 200)
+      WHEN EXISTS (SELECT 1 FROM attachments a WHERE a.message_id = m.id) THEN 'Sent a file' ELSE '' END
+    FROM messages m WHERE m.channel_id = cv.channel_id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1), '') AS preview`
 
-function conversationDto(row: ConversationRow): CustomerWidgetConversationDTO {
+function conversationDto(row: ConversationRow): CustomerSourceConversationDTO {
   return { ...row, contactName: row.contactName ?? 'Unknown' }
 }
 
 export const CONVERSATION_STATUSES: readonly CustomerConversationStatus[] = ['open', 'waiting', 'resolved', 'spam', 'trash']
 
-/** One Widget's Conversations with a status, newest first; only for the team that answers it. */
-export async function listWidgetConversations(env: ZugoidEnv, member: ServerMembership, widgetId: string, status: CustomerConversationStatus, before?: string | null): Promise<CustomerWidgetConversationDTO[]> {
+/** One Widget's or Telegram bot's Conversations with a status, newest first; only for the team that answers it. */
+export async function listSourceConversations(env: ZugoidEnv, member: ServerMembership, widgetId: string, status: CustomerConversationStatus, before?: string | null): Promise<CustomerSourceConversationDTO[]> {
   const rows = await env.DB.prepare(
     `SELECT ${conversationColumns} FROM customer_conversations cv LEFT JOIN customer_contacts ct ON ct.id = cv.contact_id
      WHERE cv.source_channel_id = ?1 AND cv.source_channel_id IN (${readableSources(member)}) AND cv.status = ?2
@@ -206,7 +207,7 @@ export async function listWidgetConversations(env: ZugoidEnv, member: ServerMemb
      ORDER BY cv.last_message_at DESC, cv.channel_id DESC LIMIT 100`,
   ).bind(widgetId, status, before ?? null).all<ConversationRow>()
   if (!rows.results?.length && !await env.DB.prepare(`SELECT 1 AS ok WHERE ? IN (${readableSources(member)})`).bind(widgetId).first()) {
-    fail(404, 'not_found', 'Widget not found')
+    fail(404, 'not_found', 'Source not found')
   }
   return (rows.results ?? []).map(conversationDto)
 }
@@ -221,46 +222,35 @@ async function findConversation(env: ZugoidEnv, member: ServerMembership, channe
      JOIN channels sc ON sc.id = cv.source_channel_id
      LEFT JOIN customer_contacts ct ON ct.id = cv.contact_id
      WHERE cv.channel_id = ? AND cv.source_channel_id IN (${readableSources(member)})`,
-  ).bind(channelId).first<ConversationRow & { sourceKind: 'mailbox' | 'widget'; sourceName: string; spaceId: string; identityId: string | null; writable: number }>()
+  ).bind(channelId).first<ConversationRow & { sourceKind: CustomerSourceKind; sourceName: string; spaceId: string; identityId: string | null; writable: number }>()
   if (!row) fail(404, 'not_found', 'Conversation not found')
   return row
 }
 
-type MessageRow = { id: string; content: string; createdAt: string; authorId: string; authorKind: 'human' | 'agent'; authorName: string; authorAvatar: string | null; direction: 'inbound' | 'outbound' | null }
-
-function messageDto(row: MessageRow, contactName: string): CustomerMessageDTO {
-  const visitor = row.authorId === CUSTOMER_VISITOR_USER_ID
-  return {
-    id: row.id, content: row.content, createdAt: row.createdAt, direction: row.direction,
-    author: { id: row.authorId, kind: row.authorKind, displayName: visitor ? contactName : row.authorName, avatarR2Key: visitor ? null : row.authorAvatar },
-  }
-}
-
-async function loadMessages(env: ZugoidEnv, conversationId: string, contactName: string, messageId?: string): Promise<CustomerMessageDTO[]> {
-  const rows = await env.DB.prepare(
-    `SELECT m.id, m.content, m.created_at AS createdAt, m.author_id AS authorId, u.kind AS authorKind,
-       coalesce(nullif(u.nickname, ''), u.display_name) AS authorName, u.avatar_r2_key AS authorAvatar, wm.direction
-     FROM messages m JOIN users u ON u.id = m.author_id
-     LEFT JOIN customer_widget_messages wm ON wm.message_id = m.id
-     WHERE m.channel_id = ?1 AND m.deleted_at IS NULL AND (?2 IS NULL OR m.id = ?2)
-     ORDER BY m.id DESC LIMIT 500`,
-  ).bind(conversationId, messageId ?? null).all<MessageRow>()
-  return (rows.results ?? []).reverse().map(row => messageDto(row, contactName))
-}
-
-/** A Widget Conversation for the team: every message, notes included, and who the Visitor says they are. */
+/**
+ * A Widget or Telegram Conversation's header for the team: who it is with, as the Visitor
+ * says or as Telegram names them. Its messages, notes included, are its channel's.
+ */
 export async function readCustomerConversation(env: ZugoidEnv, member: ServerMembership, channelId: string): Promise<CustomerConversationDetailDTO> {
   const row = await findConversation(env, member, channelId)
-  if (row.sourceKind !== 'widget') fail(404, 'not_found', 'Open email conversations in their Mailbox')
+  if (row.sourceKind === 'mailbox') fail(404, 'not_found', 'Open email conversations in their Mailbox')
   const { sourceKind, sourceName, spaceId, identityId, writable, ...conversation } = row
-  const [visitor, messages] = await Promise.all([
-    identityId
+  const [visitor, telegram] = await Promise.all([
+    identityId && sourceKind === 'widget'
       ? env.DB.prepare(`SELECT claimed_name AS claimedName, claimed_email AS claimedEmail, country, user_agent AS userAgent, last_seen_at AS lastSeenAt
           FROM customer_visitors WHERE identity_id = ? LIMIT 1`).bind(identityId).first<NonNullable<CustomerConversationDetailDTO['visitor']>>()
       : null,
-    loadMessages(env, channelId, conversation.contactName ?? 'Visitor'),
+    identityId && sourceKind === 'telegram'
+      ? env.DB.prepare(`SELECT value AS userId, display_name AS name FROM customer_identities WHERE id = ? AND kind = 'telegram'`)
+          .bind(identityId).first<{ userId: string; name: string | null }>()
+      : null,
   ])
-  return { conversation: { ...conversationDto(conversation), sourceKind, sourceName, spaceId }, visitor: visitor ?? null, messages, canReply: Boolean(writable) }
+  return {
+    conversation: { ...conversationDto(conversation), sourceKind, sourceName, spaceId },
+    visitor: visitor ?? null,
+    telegram: telegram ? { userId: telegram.userId, name: telegram.name || conversation.contactName || 'Telegram' } : null,
+    canReply: Boolean(writable),
+  }
 }
 
 /** Status and assignee, for a Conversation from any Source the member answers. */
@@ -271,33 +261,4 @@ export async function updateCustomerConversation(env: ZugoidEnv, member: ServerM
   await env.DB.prepare(
     `UPDATE customer_conversations SET status = coalesce(?, status), assignee_id = CASE WHEN ? = 1 THEN ? ELSE assignee_id END, updated_at = ? WHERE channel_id = ?`,
   ).bind(input.status ?? null, input.assigneeId === undefined ? 0 : 1, input.assigneeId ?? null, nowIso(), channelId).run()
-}
-
-/**
- * A team message in a Widget Conversation. A reply gets an outbound delivery row and so
- * reaches the Visitor; a note has none and stays inside.
- */
-export async function postCustomerConversationMessage(env: ZugoidEnv, member: ServerMembership, channelId: string, input: { content: string; kind: 'reply' | 'note' }): Promise<CustomerMessageDTO> {
-  const row = await findConversation(env, member, channelId)
-  if (row.sourceKind !== 'widget') fail(404, 'not_found', 'Answer email conversations from their Mailbox')
-  if (!row.writable) fail(403, 'forbidden', 'This Conversation is read only for you')
-  const messageId = newId()
-  const at = nowIso()
-  const reply = input.kind === 'reply'
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO messages (id, channel_id, author_id, content, reply_to_id, edited_at, deleted_at, created_at)
-       VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)`,
-    ).bind(messageId, channelId, member.user.id, input.content, at),
-    touchConversationStatement(env, { channelId, at, inbound: false }),
-    ...reply
-      ? [
-          env.DB.prepare("INSERT INTO customer_widget_messages (message_id, conversation_channel_id, direction, created_at) VALUES (?, ?, 'outbound', ?)").bind(messageId, channelId, at),
-          ...row.identityId ? [identityContactTouchStatement(env, { identityId: row.identityId, at, inbound: false })] : [],
-        ]
-      : [],
-  ])
-  const [message] = await loadMessages(env, channelId, row.contactName ?? 'Visitor', messageId)
-  if (!message) fail(404, 'not_found', 'Message not found')
-  return message
 }

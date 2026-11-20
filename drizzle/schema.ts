@@ -241,7 +241,6 @@ export const authSettings = sqliteTable('auth_settings', {
   ...isoTimestamps(),
 }, table => [
   check('auth_settings_singleton_check', sql`${table.id} = 1`),
-  check('auth_settings_registration_mode_check', sql`${table.registrationMode} in ('open', 'invite_only')`),
 ])
 
 /** OAuth and Turnstile secrets entered in the owner UI. Secrets are AES-GCM encrypted. */
@@ -252,9 +251,7 @@ export const authProviderCredentials = sqliteTable('auth_provider_credentials', 
   secretIv: text('secret_iv').notNull(),
   secretVersion: integer('secret_version').notNull().default(1),
   ...isoTimestamps(),
-}, table => [
-  check('auth_provider_credentials_provider_check', sql`${table.provider} in ('github', 'google', 'twitter', 'linkedin', 'turnstile')`),
-])
+})
 
 /** Immutable published Privacy, Terms, and server Rules bundle. */
 export const onboardingRevisions = sqliteTable('onboarding_revisions', {
@@ -322,8 +319,6 @@ export const users = sqliteTable('users', {
   index('users_status_idx').on(table.status),
   index('users_kind_idx').on(table.kind),
   index('users_role_id_idx').on(table.roleId),
-  check('users_kind_check', sql`${table.kind} in ('human', 'agent')`),
-  check('users_status_check', sql`${table.status} in ('pending', 'active', 'removed')`),
   check('users_active_role_check', sql`${table.status} <> 'active' or (${table.roleId} is not null and ${table.joinedAt} is not null)`),
 ])
 
@@ -344,9 +339,6 @@ export const agents = sqliteTable('agents', {
   ...isoTimestamps(),
 }, table => [
   index('agents_status_idx').on(table.status),
-  check('agents_status_check', sql`${table.status} in ('active', 'paused')`),
-  check('agents_harness_check', sql`${table.harness} IN ('think','pi')`),
-  check('agents_access_check', sql`${table.access} IN ('open','granted')`),
 ])
 
 /** Server-visible state for active conversational turns. Think remains authoritative for execution. */
@@ -364,7 +356,6 @@ export const agentTurns = sqliteTable('agent_turns', {
 }, table => [
   index('agent_turns_channel_agent_idx').on(table.channelId, table.agentId, table.createdAt),
   uniqueIndex('agent_turns_request_id_unique').on(table.requestId),
-  check('agent_turns_status_check', sql`${table.status} in ('queued', 'thinking', 'tool', 'waiting_approval')`),
 ])
 
 export const serverSchema = sqliteTable('server_schema', {
@@ -525,9 +516,6 @@ export const channels = sqliteTable('channels', {
   index('channels_section_type_idx').on(table.section, table.type),
   uniqueIndex('channels_thread_root_unique').on(table.parentMessageId).where(sql`${table.type} = 'thread'`),
   uniqueIndex('channels_dm_pair_key_unique').on(table.dmPairKey).where(sql`${table.dmPairKey} is not null`),
-  check('channels_type_check', sql`${table.type} in ('text', 'thread', 'dm', 'conversation')`),
-  check('channels_section_check', sql`${table.section} in ('chat', 'customers')`),
-  check('channels_visibility_check', sql`${table.visibility} in ('server', 'private')`),
   check('channels_dm_private_check', sql`${table.type} <> 'dm' or ${table.visibility} = 'private'`),
   check('channels_thread_parent_check', sql`
     (${table.type} = 'thread' and ${table.parentId} is not null and ${table.parentMessageId} is not null)
@@ -536,7 +524,6 @@ export const channels = sqliteTable('channels', {
   `),
   check('channels_conversation_section_check', sql`${table.type} <> 'conversation' or ${table.section} = 'customers'`),
   index('channels_space_idx').on(table.spaceId),
-  check('channels_dm_kind_check', sql`${table.dmKind} IN ('pair', 'group')`),
 ])
 
 /** Per-role send/attach/start-live denies for server channels. Allows are grants. Threads inherit their parent. */
@@ -598,7 +585,6 @@ export const channelAttention = sqliteTable('channel_attention', {
 }, table => [
   primaryKey({ columns: [table.channelId, table.userId] }),
   index('channel_attention_user_idx').on(table.userId, table.following),
-  check('channel_attention_notifications_check', sql`${table.notifications} in ('default', 'all', 'mentions', 'muted')`),
 ])
 
 export const invites = sqliteTable('invites', {
@@ -696,7 +682,6 @@ export const notificationOutbox = sqliteTable('notification_outbox', {
 }, table => [
   primaryKey({ columns: [table.eventId, table.subscriptionId] }),
   index('notification_outbox_due_idx').on(table.availableAt).where(sql`${table.deliveredAt} is null and ${table.failedAt} is null`),
-  check('notification_outbox_kind_check', sql`${table.kind} in ('mention', 'dm_message', 'live_started', 'mail')`),
 ])
 
 /** Cloudflare-managed mail domains attached to this single-server server. */
@@ -772,9 +757,6 @@ export const emailMessages = sqliteTable('email_messages', {
   uniqueIndex('email_messages_mailbox_rfc_message_id_unique').on(table.mailboxChannelId, table.rfcMessageId).where(sql`${table.rfcMessageId} is not null`),
   uniqueIndex('email_messages_mailbox_client_request_unique').on(table.mailboxChannelId, table.clientRequestId).where(sql`${table.clientRequestId} is not null`),
   index('email_messages_thread_created_idx').on(table.threadChannelId, table.createdAt),
-  check('email_messages_direction_check', sql`${table.direction} in ('inbound', 'outbound')`),
-  check('email_messages_delivery_status_check', sql`${table.deliveryStatus} in ('received', 'pending', 'sent', 'failed')`),
-  check('email_messages_body_format_check', sql`${table.bodyFormat} in ('text', 'markdown')`),
 ])
 
 /**
@@ -797,7 +779,6 @@ export const mailDrafts = sqliteTable('mail_drafts', {
 }, table => [
   index('mail_drafts_author_mailbox_idx').on(table.authorId, table.mailboxChannelId, table.updatedAt),
   uniqueIndex('mail_drafts_author_thread_unique').on(table.authorId, table.threadChannelId).where(sql`${table.threadChannelId} is not null`),
-  check('mail_drafts_body_format_check', sql`${table.bodyFormat} in ('text', 'markdown')`),
 ])
 
 /** A person the team deals with. Email, phone and the rest are its Identities. */
@@ -823,21 +804,23 @@ export const customerContacts = sqliteTable('customer_contacts', {
 export const customerIdentities = sqliteTable('customer_identities', {
   spaceId: text('space_id').notNull().default(DEFAULT_SPACE_ID),
   id: text('id').primaryKey(),
-  /** `email`: an address; `browser`: one Visitor's browser on a Widget, proven by its token. */
-  kind: text('kind', { enum: ['email', 'browser'] }).notNull(),
-  /** Normalized: a lowercased email address, or a Visitor's ID. */
+  /**
+   * `email`: an address; `browser`: one Visitor's browser on a Widget, proven by its token;
+   * `telegram`: a Telegram user, proven by Telegram.
+   */
+  kind: text('kind', { enum: ['email', 'browser', 'telegram'] }).notNull(),
+  /** Normalized: a lowercased email address, a Visitor's ID, or a Telegram user's ID. */
   value: text('value').notNull(),
   /** The name it last gave, such as an email's display name. */
   displayName: text('display_name'),
   contactId: text('contact_id').notNull().references(() => customerContacts.id, { onDelete: 'cascade' }),
   verifiedAt: text('verified_at'),
-  /** `sender_auth`: inbound mail from it passed sender authentication. */
-  verifiedBy: text('verified_by', { enum: ['sender_auth'] }),
+  /** `sender_auth`: inbound mail from it passed sender authentication; `telegram`: Telegram named the sender. */
+  verifiedBy: text('verified_by', { enum: ['sender_auth', 'telegram'] }),
   ...isoTimestamps(),
 }, table => [
   uniqueIndex('customer_identities_value_unique').on(table.spaceId, table.kind, table.value),
   index('customer_identities_contact_idx').on(table.contactId),
-  check('customer_identities_kind_check', sql`${table.kind} in ('email', 'browser')`),
   check('customer_identities_verified_check', sql`(${table.verifiedAt} is null) = (${table.verifiedBy} is null)`),
 ])
 
@@ -877,24 +860,22 @@ export const customerContactCompanies = sqliteTable('customer_contact_companies'
 }, table => [
   primaryKey({ columns: [table.contactId, table.companyId] }),
   index('customer_contact_companies_company_idx').on(table.companyId, table.current),
-  check('customer_contact_companies_linked_by_check', sql`${table.linkedBy} in ('domain', 'member')`),
 ])
 
 /**
  * Where Customer Conversations come from: a private channel in Customers. Each kind
  * keeps its own row beside this one (`email_mailboxes` for a Mailbox, `customer_widgets`
- * for a Widget). Its channel members are the team that answers it.
+ * for a Widget, `customer_telegram_bots` for a Telegram bot). Its channel members are the
+ * team that answers it.
  */
 export const customerSources = sqliteTable('customer_sources', {
   channelId: text('channel_id').primaryKey().references(() => channels.id, { onDelete: 'cascade' }),
-  kind: text('kind', { enum: ['mailbox', 'widget'] }).notNull(),
+  kind: text('kind', { enum: ['mailbox', 'widget', 'telegram'] }).notNull(),
   /** An Agent of the Source's Space that answers first. Nothing answers until `first_line_enabled`. */
   firstLineAgentId: text('first_line_agent_id').references(() => users.id, { onDelete: 'set null' }),
   firstLineEnabled: integer('first_line_enabled', { mode: 'boolean' }).notNull().default(false),
   ...isoTimestamps(),
-}, table => [
-  check('customer_sources_kind_check', sql`${table.kind} in ('mailbox', 'widget')`),
-])
+})
 
 /** One exchange from one Source: a `conversation` channel under the Source's channel. */
 export const customerConversations = sqliteTable('customer_conversations', {
@@ -905,8 +886,9 @@ export const customerConversations = sqliteTable('customer_conversations', {
   status: text('status', { enum: ['open', 'waiting', 'resolved', 'spam', 'trash'] }).notNull().default('open'),
   assigneeId: text('assignee_id').references(() => users.id, { onDelete: 'set null' }),
   /**
-   * The Identity on the other side when the Source proves one: a Visitor's browser. A Visitor
-   * reads only Conversations of their own Identity, whatever Contact the team joins it into.
+   * The Identity on the other side when the Source proves one: a Visitor's browser, a Telegram
+   * user. A Visitor reads only Conversations of their own Identity, whatever Contact the team
+   * joins it into, and a Telegram reply goes to this Identity's chat.
    */
   identityId: text('identity_id').references(() => customerIdentities.id, { onDelete: 'set null' }),
   lastMessageAt: text('last_message_at').notNull(),
@@ -916,7 +898,6 @@ export const customerConversations = sqliteTable('customer_conversations', {
   index('customer_conversations_source_status_latest_idx').on(table.sourceChannelId, table.status, table.lastMessageAt),
   index('customer_conversations_contact_latest_idx').on(table.contactId, table.lastMessageAt),
   index('customer_conversations_assignee_idx').on(table.assigneeId, table.status),
-  check('customer_conversations_status_check', sql`${table.status} in ('open', 'waiting', 'resolved', 'spam', 'trash')`),
 ])
 
 /**
@@ -973,7 +954,55 @@ export const customerWidgetMessages = sqliteTable('customer_widget_messages', {
   createdAt: text('created_at').notNull(),
 }, table => [
   index('customer_widget_messages_conversation_idx').on(table.conversationChannelId, table.messageId),
-  check('customer_widget_messages_direction_check', sql`${table.direction} in ('inbound', 'outbound')`),
+])
+
+/**
+ * A Telegram bot: a Source whose people write to the bot in private chats. A database trigger
+ * adds its `customer_sources` row. The token is encrypted with the Server's key. Telegram
+ * calls the Server's webhook with `webhook_secret`, or, for a Server Telegram cannot reach,
+ * the Server asks Telegram for updates.
+ */
+export const customerTelegramBots = sqliteTable('customer_telegram_bots', {
+  channelId: text('channel_id').primaryKey().references(() => customerSources.channelId, { onDelete: 'cascade' }),
+  /** Telegram's ID for the bot: the number before the colon in its token. */
+  botId: text('bot_id').notNull(),
+  username: text('username').notNull(),
+  tokenCiphertext: text('token_ciphertext').notNull(),
+  tokenIv: text('token_iv').notNull(),
+  /** Random; Telegram sends it back in `X-Telegram-Bot-Api-Secret-Token` with every update. */
+  webhookSecret: text('webhook_secret').notNull(),
+  /** `webhook`: Telegram calls the Server; `polling`: the Server asks Telegram. */
+  updates: text('updates', { enum: ['webhook', 'polling'] }).notNull().default('webhook'),
+  /** The Bot API address: Telegram's own, or a Bot API server or proxy the Server can reach. */
+  apiBase: text('api_base').notNull().default('https://api.telegram.org'),
+  /** The next update ID to take; an update below it was already taken. */
+  updateOffset: integer('update_offset').notNull().default(0),
+  /** The first line someone reads after /start. */
+  greeting: text('greeting').notNull().default(''),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  /** What Telegram last refused, in its words, until the next update works. */
+  lastError: text('last_error'),
+  createdBy: text('created_by').references(() => users.id, { onDelete: 'set null' }),
+  ...isoTimestamps(),
+}, table => [
+  uniqueIndex('customer_telegram_bots_bot_unique').on(table.botId),
+])
+
+/**
+ * A Telegram message's delivery row. Only messages with one reach Telegram; notes have none.
+ * An outbound one is `pending` until Telegram accepts it (`sent`) or refuses it (`failed`).
+ */
+export const customerTelegramMessages = sqliteTable('customer_telegram_messages', {
+  messageId: text('message_id').primaryKey().references(() => messages.id, { onDelete: 'cascade' }),
+  conversationChannelId: text('conversation_channel_id').notNull().references(() => customerConversations.channelId, { onDelete: 'cascade' }),
+  direction: text('direction', { enum: ['inbound', 'outbound'] }).notNull(),
+  status: text('status', { enum: ['received', 'pending', 'sent', 'failed'] }).notNull(),
+  /** Telegram's ID for the message in its chat, once Telegram has one. */
+  telegramMessageId: integer('telegram_message_id'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+}, table => [
+  index('customer_telegram_messages_conversation_idx').on(table.conversationChannelId, table.messageId),
 ])
 
 /** Pending live-file deletion keys survive removal of their mailbox. */
@@ -1030,7 +1059,6 @@ export const databaseFields = sqliteTable('database_fields', {
   uniqueIndex('database_fields_name_unique').on(table.databaseId, table.name),
   uniqueIndex('database_fields_slot_unique').on(table.databaseId, table.slot),
   index('database_fields_position_idx').on(table.databaseId, table.position),
-  check('database_fields_type_check', sql`${table.type} in ('text', 'number', 'boolean', 'date', 'select', 'multi_select', 'url', 'email', 'phone', 'person', 'relation')`),
 ])
 
 /** Scalar custom fields use bounded typed slots; semantic names stay in database_fields. */
@@ -1101,7 +1129,6 @@ export const dataItems = sqliteTable('data_items', {
   index('data_items_parent_idx').on(table.spaceId, table.parentId, table.position),
   // parent_id's ON DELETE RESTRICT looks up children by this column on every deleted row.
   index('data_items_parent_id_idx').on(table.parentId),
-  check('data_items_kind_check', sql`${table.kind} in ('page', 'canvas')`),
   index('database_items_database_position_idx').on(table.databaseId, table.position),
   index('database_items_active_position_idx').on(table.databaseId, table.position, table.createdAt, table.id).where(sql`${table.deletedAt} is null`),
   check('database_items_version_check', sql`${table.version} > 0`),
@@ -1122,7 +1149,6 @@ export const databaseViews = sqliteTable('database_views', {
 }, table => [
   uniqueIndex('database_views_name_unique').on(table.databaseId, table.name),
   index('database_views_database_position_idx').on(table.databaseId, table.position),
-  check('database_views_layout_check', sql`${table.layout} in ('table', 'board', 'calendar', 'list', 'gallery')`),
   check('database_views_version_check', sql`${table.version} > 0`),
 ])
 
@@ -1135,8 +1161,6 @@ export const dataReferences = sqliteTable('data_references', {
 }, table => [
   primaryKey({ columns: [table.sourceType, table.sourceId, table.targetType, table.targetId] }),
   index('data_references_target_idx').on(table.targetType, table.targetId),
-  check('data_references_source_check', sql`${table.sourceType} in ('item','document','record','database','canvas','task')`),
-  check('data_references_target_check', sql`${table.targetType} in ('item','document','record','database','canvas','task')`),
 ])
 
 export const dataRecordRequests = sqliteTable('data_record_requests', {
@@ -1184,8 +1208,6 @@ export const canvasNodes = sqliteTable('canvas_nodes', {
   ...isoTimestamps(),
 }, table => [
   index('canvas_nodes_canvas_idx').on(table.canvasId, table.createdAt),
-  check('canvas_nodes_kind_check', sql`${table.kind} in ('note', 'text')`),
-  check('canvas_nodes_color_check', sql`${table.color} in ('neutral', 'orange', 'blue', 'green', 'red')`),
   check('canvas_nodes_version_check', sql`${table.version} > 0`),
 ])
 
@@ -1212,7 +1234,6 @@ export const dataBookmarks = sqliteTable('data_bookmarks', {
 }, table => [
   primaryKey({ columns: [table.userId, table.targetType, table.targetId] }),
   index('data_bookmarks_user_position_idx').on(table.userId, table.position, table.createdAt),
-  check('data_bookmarks_target_type_check', sql`${table.targetType} in ('database_view', 'item')`),
 ])
 
 /** Declarative internal tools. Drafts are mutable; published versions are immutable snapshots. */
@@ -1403,8 +1424,6 @@ export const tasks = sqliteTable('tasks', {
   index('tasks_assignee_id_idx').on(table.assigneeId),
   index('tasks_source_message_idx').on(table.sourceChannelId, table.sourceMessageId).where(sql`${table.sourceMessageId} IS NOT NULL`),
   uniqueIndex('tasks_discussion_channel_unique').on(table.discussionChannelId).where(sql`${table.discussionChannelId} is not null`),
-  check('tasks_status_check', sql`${table.status} in ('backlog', 'ready', 'review', 'done', 'failed')`),
-  check('tasks_priority_check', sql`${table.priority} in ('low', 'normal', 'high', 'urgent')`),
   index('tasks_project').on(table.projectId),
 ])
 
@@ -1486,7 +1505,6 @@ export const taskAttachments = sqliteTable('task_attachments', {
   index('task_attachments_task_created_idx').on(table.taskId, table.createdAt),
   index('task_attachments_source_idx').on(table.sourceId),
   check('task_attachments_size_check', sql`${table.sizeBytes} > 0`),
-  check('task_attachments_role_check', sql`${table.role} in ('file', 'recording', 'frame')`),
 ])
 
 export const mcpOutboundConnections = sqliteTable('mcp_outbound_connections', {
@@ -1535,7 +1553,6 @@ export const spaceMembers = sqliteTable('space_members', {
 }, table => [
   primaryKey({ columns: [table.spaceId, table.userId] }),
   index('space_members_user_idx').on(table.userId),
-  check('space_members_role_check', sql`${table.role} IN ('member', 'admin')`),
 ])
 
 export const spaceUsage = sqliteTable('space_usage', {
@@ -1545,7 +1562,6 @@ export const spaceUsage = sqliteTable('space_usage', {
   count: integer('count').notNull().default(0),
 }, table => [
   primaryKey({ columns: [table.spaceId, table.metric, table.period] }),
-  check('space_usage_metric_check', sql`${table.metric} IN ('runs', 'emails', 'voice')`),
 ])
 
 /** Counts for the Owner's table of Spaces, a snapshot and never a source of truth. See server/utils/space-admin.ts. */
@@ -1620,7 +1636,6 @@ export const agentRuns = sqliteTable('agent_runs', {
   unique().on(table.agentId, table.initiatedBy, table.idempotencyKey),
   index('agent_runs_session_status').on(table.sessionId, table.status, table.createdAt),
   index('agent_runs_root').on(sql`COALESCE(json_extract(mandate_json,'$.rootRunId'),id)`),
-  check('agent_runs_status_check', sql`${table.status} IN ('queued','running','completed','failed','cancelled')`),
 ])
 
 export const agentCodeProposals = sqliteTable('agent_code_proposals', {
@@ -1685,7 +1700,6 @@ export const agentRunPublications = sqliteTable('agent_run_publications', {
 }, table => [
   uniqueIndex('agent_run_publication_active').on(table.runId).where(sql`${table.status} IN ('pending','executing','completed','uncertain')`),
   index('agent_run_publication_history').on(table.runId, table.createdAt),
-  check('agent_run_publications_status_check', sql`${table.status} IN ('pending','rejected','expired','executing','completed','uncertain')`),
 ])
 
 export const agentRunTools = sqliteTable('agent_run_tools', {
@@ -1699,7 +1713,6 @@ export const agentRunTools = sqliteTable('agent_run_tools', {
   createdAt: text('created_at').notNull(),
 }, table => [
   primaryKey({ columns: [table.runId, table.callId] }),
-  check('agent_run_tools_status_check', sql`${table.status} IN ('pending','completed','failed')`),
 ])
 
 export const agentToolDecisions = sqliteTable('agent_tool_decisions', {
@@ -1713,9 +1726,7 @@ export const agentToolDecisions = sqliteTable('agent_tool_decisions', {
   createdAt: text('created_at').notNull(),
 }, table => [
   primaryKey({ columns: [table.runId, table.callId] }),
-  check('agent_tool_decisions_effect_check', sql`${table.effect} IN ('control','read','write','external','unknown')`),
   check('agent_tool_decisions_untrusted_context_check', sql`${table.untrustedContext} IN (0,1)`),
-  check('agent_tool_decisions_decision_check', sql`${table.decision} IN ('allowed','blocked')`),
 ])
 
 export const agentSchedules = sqliteTable('agent_schedules', {
@@ -1742,9 +1753,6 @@ export const agentSchedules = sqliteTable('agent_schedules', {
 }, table => [
   index('agent_schedules_created_by_status_idx').on(table.createdBy, table.status, table.nextAt),
   index('agent_schedules_principal_status_idx').on(table.principalId, table.status, table.nextAt),
-  check('agent_schedules_kind_check', sql`${table.kind} IN ('reminder','work')`),
-  check('agent_schedules_recurrence_check', sql`${table.recurrence} IN ('once','daily','weekly')`),
-  check('agent_schedules_status_check', sql`${table.status} IN ('active','completed','cancelled','blocked')`),
 ])
 
 export const agentScheduleOccurrences = sqliteTable('agent_schedule_occurrences', {
@@ -1826,7 +1834,6 @@ export const factoryBoxes = sqliteTable('factory_boxes', {
   unique().on(table.taskId, table.agentId, table.initiatedBy),
   index('factory_boxes_node').on(table.nodeId, table.status),
   index('factory_boxes_run').on(table.runId),
-  check('factory_boxes_status_check', sql`${table.status} IN ('new','queued','starting','running','idle','stopped','released','failed')`),
 ])
 
 /** What leaves a box waits here for a person when the mode asks: a plan, a push, a network window or a merge. Diffs live in R2. */
@@ -1849,8 +1856,6 @@ export const factoryApprovals = sqliteTable('factory_approvals', {
 }, table => [
   unique().on(table.runId, table.callId),
   index('factory_approvals_box').on(table.boxId, table.status),
-  check('factory_approvals_kind_check', sql`${table.kind} IN ('plan','publish','window','merge')`),
-  check('factory_approvals_status_check', sql`${table.status} IN ('pending_diff','pending','approved','publishing','rejected','expired','completed','failed','uncertain')`),
 ])
 
 /** The private files bucket's index and its open uploads. */
@@ -1900,9 +1905,7 @@ export const gitSetupRequests = sqliteTable('git_setup_requests', {
   status: text('status').notNull(),
   createdAt: text('created_at').notNull(),
   expiresAt: text('expires_at').notNull(),
-}, table => [
-  check('git_setup_requests_status_check', sql`${table.status} IN ('pending','exchanging','complete','failed')`),
-])
+})
 
 export const rolePolicies = sqliteTable('role_policies', {
   roleId: text('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
@@ -1934,8 +1937,6 @@ export const serverDomainRequests = sqliteTable('server_domain_requests', {
   updatedAt: text('updated_at').notNull(),
 }, table => [
   index('server_domain_requests_status_idx').on(table.status, table.createdAt),
-  check('server_domain_requests_action_check', sql`${table.action} IN ('add', 'remove', 'primary')`),
-  check('server_domain_requests_status_check', sql`${table.status} IN ('pending', 'running', 'complete', 'failed')`),
 ])
 
 export const schema = {

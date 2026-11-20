@@ -1,6 +1,6 @@
 {
   "name": "zugoid",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "BUSL-1.1",
   "type": "module",
   "private": true,
@@ -27,8 +27,7 @@
     "test:watch": "vitest",
     "db:migrate:local": "wrangler d1 migrations apply DB --local -c wrangler.dev.jsonc",
     "db:migrate": "node scripts/forbid-local-deploy.mjs",
-    "db:generate": "drizzle-kit generate",
-    "db:generate:custom": "drizzle-kit generate --custom",
+    "db:generate": "node scripts/generate-migration.mjs",
     "db:baseline": "node scripts/regenerate-baseline.mjs",
     "db:schema:check": "node scripts/check-schema-generate.mjs",
     "db:migrations:check": "node scripts/check-migrations.mjs",

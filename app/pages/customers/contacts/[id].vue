@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import type { CustomerCompanyDTO, CustomerContactDTO, CustomerConversationDTO, CustomerConversationStatus } from '~~/shared/types'
 import { errorMessage } from '~/composables/useApi'
 import { formatDateTime } from '~~/shared/format'
-import { mailPath, widgetPath, type MailFolder } from '~~/shared/paths'
+import { mailPath, telegramPath, widgetPath, type MailFolder } from '~~/shared/paths'
 
 definePageMeta({ layout: 'server', middleware: ['auth'] })
 
@@ -21,8 +21,10 @@ const conversations = computed(() => contactQ.data.value?.conversations ?? [])
 const statusLabel: Record<CustomerConversationStatus, string> = { open: 'Open', waiting: 'Waiting', resolved: 'Resolved', spam: 'Spam', trash: 'Trash' }
 const statusFolder: Record<CustomerConversationStatus, MailFolder> = { open: 'inbox', waiting: 'inbox', resolved: 'archive', spam: 'spam', trash: 'trash' }
 
+const sourceIcon: Record<CustomerConversationDTO['sourceKind'], string> = { mailbox: 'i-ph-envelope-simple', widget: 'i-ph-chat-circle-dots', telegram: 'i-ph-telegram-logo' }
 function conversationPath(conversation: CustomerConversationDTO) {
   if (conversation.sourceKind === 'widget') return widgetPath(conversation.sourceChannelId, conversation.status, conversation.channelId)
+  if (conversation.sourceKind === 'telegram') return telegramPath(conversation.sourceChannelId, conversation.status, conversation.channelId)
   return mailPath(conversation.sourceChannelId, statusFolder[conversation.status], conversation.channelId)
 }
 
@@ -148,11 +150,11 @@ async function mergeInto(target: CustomerContactDTO) {
       </section>
       <section class="px-4 py-4">
         <h3 class="mb-2 text-sm font-semibold text-highlighted">Conversations</h3>
-        <p v-if="!conversations.length" class="text-sm text-muted">No conversations in Mailboxes you can read.</p>
+        <p v-if="!conversations.length" class="text-sm text-muted">No conversations in Sources you can read.</p>
         <ul v-else class="divide-y divide-default rounded-md border border-default">
           <li v-for="conversation in conversations" :key="conversation.channelId">
             <NuxtLink :to="conversationPath(conversation)" class="flex items-center gap-3 px-3 py-2 hover:bg-elevated/60">
-              <UIcon name="i-ph-envelope-simple" class="size-4 shrink-0 text-dimmed" />
+              <UIcon :name="sourceIcon[conversation.sourceKind]" class="size-4 shrink-0 text-dimmed" />
               <div class="min-w-0 flex-1">
                 <p class="truncate text-sm text-highlighted">{{ conversation.subject }}</p>
                 <p class="truncate text-xs text-muted">{{ conversation.sourceName }}</p>

@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 import { drizzle } from 'drizzle-orm/d1'
 import baselineSql from '../../drizzle/server-migrations/0000_baseline.sql?raw'
+import customersTelegramSql from '../../drizzle/server-migrations/0001_customers_telegram.sql?raw'
 import { schema } from '../../drizzle/schema'
 import { isUuidV4 } from '../../shared/server-settings'
 import { isOperatorManaged } from '../../shared/server-runtime'
@@ -26,6 +27,7 @@ export function d1ExecSql(sql: string): string {
 
 export const INIT_SQL = d1ExecSql([
   baselineSql,
+  customersTelegramSql,
 ].join('\n--> statement-breakpoint\n'))
 
 /** Bootstrap is only for an empty database. Deployed changes use D1 migrations. */

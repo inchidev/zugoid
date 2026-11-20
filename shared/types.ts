@@ -397,11 +397,14 @@ export type CustomerCompanyDTO = {
   createdAt: string
 }
 
+/** Where Customer Conversations come from. */
+export type CustomerSourceKind = 'mailbox' | 'widget' | 'telegram'
+
 /** One Customer Conversation on a Contact, from a Source the viewer can read. */
 export type CustomerConversationDTO = {
   channelId: string
   sourceChannelId: string
-  sourceKind: 'mailbox' | 'widget'
+  sourceKind: CustomerSourceKind
   sourceName: string
   subject: string
   status: CustomerConversationStatus
@@ -427,8 +430,31 @@ export type CustomerWidgetDTO = {
   canManage: boolean
 }
 
-/** One Conversation in a Widget's list. */
-export type CustomerWidgetConversationDTO = {
+/** A Telegram bot as the team sees it. Its token never leaves the Server. */
+export type CustomerTelegramBotDTO = {
+  channelId: string
+  spaceId: string
+  botId: string
+  /** Without the @. */
+  username: string
+  /** `webhook`: Telegram calls the Server; `polling`: the Server asks Telegram. */
+  updates: 'webhook' | 'polling'
+  /** The Bot API address the Server talks to. */
+  apiBase: string
+  greeting: string
+  enabled: boolean
+  /** What Telegram last refused, in its words, until updates work again. */
+  lastError: string | null
+  /** Conversations that are open or waiting. */
+  openCount: number
+  /** The viewer answers it: a channel member. */
+  member: boolean
+  /** The viewer is the Owner or has Manage server. */
+  canManage: boolean
+}
+
+/** One Conversation in a Widget's or a Telegram bot's list. */
+export type CustomerSourceConversationDTO = {
   channelId: string
   sourceChannelId: string
   contactId: string | null
@@ -439,13 +465,13 @@ export type CustomerWidgetConversationDTO = {
   preview: string
 }
 
-/** A message in a Customer Conversation. `direction` is null for an internal note, which never leaves. */
-export type CustomerMessageDTO = {
-  id: string
-  content: string
-  createdAt: string
-  author: PublicUser
+/**
+ * Where a message in a Customer Conversation stands. `direction` is null for an internal note,
+ * which never leaves; an outbound one is `pending` until its Source took it.
+ */
+export type CustomerDeliveryDTO = {
   direction: 'inbound' | 'outbound' | null
+  status: 'received' | 'pending' | 'sent' | 'failed' | null
 }
 
 /** Who a Widget Conversation is with. A typed name or email is a claim nobody verified. */
@@ -457,10 +483,17 @@ export type CustomerVisitorDTO = {
   lastSeenAt: string
 }
 
+/** Who a Telegram Conversation is with, as Telegram names them. */
+export type CustomerTelegramUserDTO = {
+  userId: string
+  name: string
+}
+
+/** A Conversation's header. Its messages are its channel's, read like any other. */
 export type CustomerConversationDetailDTO = {
-  conversation: CustomerWidgetConversationDTO & { sourceName: string; sourceKind: 'mailbox' | 'widget'; spaceId: string }
+  conversation: CustomerSourceConversationDTO & { sourceName: string; sourceKind: CustomerSourceKind; spaceId: string }
   visitor: CustomerVisitorDTO | null
-  messages: CustomerMessageDTO[]
+  telegram: CustomerTelegramUserDTO | null
   /** The viewer can reply, add notes and change the status. */
   canReply: boolean
 }
@@ -473,6 +506,16 @@ export type WidgetVisitorMessageDTO = {
   /** A team member's display name on a reply; nothing on the Visitor's own. */
   authorName: string | null
   createdAt: string
+  /** Pictures and voice; the frame reads each from the Widget's files route with its token. */
+  attachments: WidgetVisitorFileDTO[]
+}
+
+export type WidgetVisitorFileDTO = {
+  id: string
+  filename: string
+  contentType: string
+  width: number | null
+  height: number | null
 }
 
 export type MailThreadDTO = {
@@ -693,6 +736,8 @@ export type MessageDTO = {
   createdAt: string
   clientId?: string
   deliveryState?: 'uploading' | 'sending' | 'failed'
+  /** Only in a Customer Conversation: whether it came in, went out, or is a note. */
+  customer?: CustomerDeliveryDTO
 }
 
 export type MessageSearchChannelDTO = {
@@ -963,7 +1008,8 @@ export type SetupHealth = {
 
 export type ClientMsg =
   | { t: 'auth'; token: string }
-  | { t: 'message.create'; content: string; replyToId?: string; clientId: string; attachmentIds?: string[]; agentMode?: 'queue' | 'steer' }
+  /** `deliver`: in a Customer Conversation, a reply that leaves through its Source; otherwise a note. */
+  | { t: 'message.create'; content: string; replyToId?: string; clientId: string; attachmentIds?: string[]; agentMode?: 'queue' | 'steer'; deliver?: boolean }
   | { t: 'message.update'; id: string; content: string }
   | { t: 'message.delete'; id: string }
   | { t: 'typing'; active: boolean }

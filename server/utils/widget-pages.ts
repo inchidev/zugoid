@@ -142,6 +142,12 @@ const FRAME_SCRIPT = `(() => {
   const send = document.getElementById('send')
   const status = document.getElementById('status')
   const intro = document.getElementById('intro')
+  const picker = document.getElementById('picker')
+  const attach = document.getElementById('attach')
+  const record = document.getElementById('record')
+  const tray = document.getElementById('tray')
+  let pending = []
+  let recorder = null
   let token = null
   try { token = localStorage.getItem(key) } catch {}
   let cursor = null
@@ -180,11 +186,90 @@ const FRAME_SCRIPT = `(() => {
     const body = document.createElement('div')
     body.className = 'body'
     body.textContent = message.content
-    item.appendChild(body)
+    if (message.content) item.appendChild(body)
+    for (const file of message.attachments || []) item.appendChild(fileView(file))
     log.appendChild(item)
     log.scrollTop = log.scrollHeight
     if (message.direction === 'outbound' && !open) { unread += 1; tellParent({ type: 'zugoid-widget:unread', count: unread }) }
   }
+  // A file is read with the token and shown from a blob: URL, so the token never goes in an address.
+  const fileView = (file) => {
+    const kind = file.contentType.split('/')[0]
+    const view = document.createElement(kind === 'image' ? 'img' : kind === 'video' ? 'video' : 'audio')
+    view.className = 'file ' + kind
+    if (kind === 'image') view.alt = file.filename
+    else view.controls = true
+    if (kind === 'video' && file.width && file.width === file.height) view.classList.add('round')
+    fetch(base + '/files/' + encodeURIComponent(file.id), { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit', cache: 'no-store' })
+      .then(response => response.ok ? response.blob() : null)
+      .then((blob) => { if (blob) view.src = URL.createObjectURL(blob) })
+      .catch(() => {})
+    return view
+  }
+  const claimsNow = () => ({ name: document.getElementById('name').value.trim() || undefined, email: document.getElementById('email').value.trim() || undefined })
+  const ensureSession = async () => {
+    if (!token) save((await call('/session', { method: 'POST', body: JSON.stringify(claimsNow()) })).token)
+  }
+  const showTray = () => {
+    tray.replaceChildren(...pending.map((file, index) => {
+      const chip = document.createElement('button')
+      chip.type = 'button'
+      chip.className = 'chip'
+      chip.textContent = (file.contentType.startsWith('audio/') ? 'Voice message' : file.filename) + ' \u00d7'
+      chip.setAttribute('aria-label', 'Remove ' + file.filename)
+      chip.addEventListener('click', () => { pending.splice(index, 1); showTray() })
+      return chip
+    }))
+    tray.hidden = !pending.length
+  }
+  const upload = async (blob, filename) => {
+    status.textContent = ''
+    if (pending.length >= ${WIDGET_LIMITS.files}) { status.textContent = 'At most ${WIDGET_LIMITS.files} files in one message.'; return }
+    try {
+      await ensureSession()
+      const body = new FormData()
+      body.append('file', blob, filename)
+      const response = await fetch(base + '/files', { method: 'POST', body, headers: { Authorization: 'Bearer ' + token }, credentials: 'omit', cache: 'no-store' })
+      if (!response.ok) {
+        let message = 'This file could not be sent.'
+        try { const answer = await response.json(); if (answer && (answer.message || answer.statusMessage)) message = answer.message || answer.statusMessage } catch {}
+        throw new Error(message)
+      }
+      pending.push((await response.json()).file)
+      showTray()
+    } catch (error) { status.textContent = error.message }
+  }
+  attach.addEventListener('click', () => picker.click())
+  picker.addEventListener('change', () => {
+    for (const file of Array.from(picker.files || [])) void upload(file, file.name)
+    picker.value = ''
+  })
+  const recordable = typeof MediaRecorder !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+  record.hidden = !recordable
+  record.addEventListener('click', async () => {
+    if (recorder) { recorder.stop(); return }
+    status.textContent = ''
+    let stream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) }
+    catch { status.textContent = 'The microphone is not available.'; return }
+    const type = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/mp4'].find(value => MediaRecorder.isTypeSupported(value))
+    const chunks = []
+    recorder = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream)
+    recorder.addEventListener('dataavailable', (event) => { if (event.data.size) chunks.push(event.data) })
+    recorder.addEventListener('stop', () => {
+      for (const track of stream.getTracks()) track.stop()
+      const blob = new Blob(chunks, { type: recorder.mimeType || type || 'audio/webm' })
+      const extension = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm'
+      recorder = null
+      record.classList.remove('on')
+      record.setAttribute('aria-label', 'Record a voice message')
+      if (blob.size) void upload(blob, 'voice.' + extension)
+    })
+    recorder.start()
+    record.classList.add('on')
+    record.setAttribute('aria-label', 'Stop recording')
+    setTimeout(() => { if (recorder && recorder.state === 'recording') recorder.stop() }, 120000)
+  })
   const poll = async () => {
     clearTimeout(timer)
     if (token) {
@@ -199,16 +284,18 @@ const FRAME_SCRIPT = `(() => {
   }
   const submit = async () => {
     const content = text.value.trim()
-    if (!content || send.disabled) return
+    if ((!content && !pending.length) || send.disabled) return
     send.disabled = true
     status.textContent = ''
-    const claims = { name: document.getElementById('name').value.trim() || undefined, email: document.getElementById('email').value.trim() || undefined }
+    const claims = claimsNow()
     try {
       for (let attempt = 0; ; attempt++) {
         try {
           if (!token) save((await call('/session', { method: 'POST', body: JSON.stringify(claims) })).token)
-          const answer = await call('/messages', { method: 'POST', body: JSON.stringify({ content, ...claims }) })
+          const answer = await call('/messages', { method: 'POST', body: JSON.stringify({ content, ...claims, attachmentIds: pending.map(file => file.id) }) })
           text.value = ''
+          pending = []
+          showTray()
           intro.hidden = true
           show(answer.message)
           break
@@ -273,6 +360,20 @@ function frameStyle(look: WidgetLook): string {
   #send { flex: none; border: 0; border-radius: 6px; padding: 0 14px; height: 38px; background: var(--primary); color: var(--on-primary); font: inherit; font-weight: 500; cursor: pointer; }
   #send:hover { opacity: .9; }
   #send:disabled { opacity: .5; cursor: default; }
+  .tool { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+  .tool:hover { background: var(--soft); color: var(--text); }
+  .tool:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+  .tool svg { width: 18px; height: 18px; }
+  .tool.on { color: var(--error); }
+  #tray { display: flex; flex-wrap: wrap; gap: 6px; }
+  #tray[hidden] { display: none; }
+  .chip { border: 1px solid var(--line); border-radius: 999px; background: var(--soft); color: var(--text); font: inherit; font-size: 12px; padding: 2px 10px; cursor: pointer; }
+  .file { display: block; max-width: 100%; margin-top: 6px; border-radius: 6px; }
+  .msg > .file:first-child { margin-top: 0; }
+  img.file { max-height: 240px; }
+  audio.file { width: 240px; max-width: 100%; }
+  video.file { max-height: 240px; }
+  video.file.round { width: 200px; height: 200px; border-radius: 50%; object-fit: cover; }
   #status { min-height: 0; margin: 0; font-size: 12px; color: var(--error); }
   #status:empty { display: none; }
   .note { margin: 0; font-size: 12px; color: var(--muted); }
@@ -295,7 +396,8 @@ export function widgetFrameHtml(widget: Pick<PublicWidget, 'publicId' | 'name' |
 <main id="log" aria-live="polite">${widget.greeting.trim() ? `<p class="greeting">${escapeHtml(widget.greeting)}</p>` : ''}</main>
 <form id="form" autocomplete="on">
 <div id="intro"><input id="name" name="name" maxlength="${WIDGET_LIMITS.claimedName}" placeholder="Name (optional)" autocomplete="name"><input id="email" name="email" type="email" maxlength="254" placeholder="Email (optional)" autocomplete="email"></div>
-<div class="row"><textarea id="text" rows="1" maxlength="${WIDGET_LIMITS.message}" placeholder="Write a message" aria-label="Message"></textarea><button id="send" type="submit">Send</button></div>
+<div id="tray" hidden></div>
+<div class="row"><button id="attach" class="tool" type="button" aria-label="Send a picture"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg></button><button id="record" class="tool" type="button" aria-label="Record a voice message" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><input id="picker" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden><textarea id="text" rows="1" maxlength="${WIDGET_LIMITS.message}" placeholder="Write a message" aria-label="Message"></textarea><button id="send" type="submit">Send</button></div>
 <p id="status" role="alert"></p>
 <p class="note">This chat keeps your messages, browser and country so the team can answer you.</p>
 </form>
@@ -355,6 +457,16 @@ export function limitWidgetMessage(event: H3Event, visitor: WidgetVisitor) {
     { key: `widget:send-day:${visitor.id}`, limit: 300, windowMs: DAY },
     { key: `widget:send:ip:${ip}`, limit: 30, windowMs: MINUTE },
   ], 'Too many messages. Wait a moment.')
+}
+
+/** Files: a few pictures or voice messages a minute, and not a stream of them. */
+export function limitWidgetUpload(event: H3Event, visitor: WidgetVisitor) {
+  const ip = clientIp(event)
+  return requireRateLimit(event, [
+    { key: `widget:file:${visitor.id}`, limit: 10, windowMs: MINUTE },
+    { key: `widget:file-day:${visitor.id}`, limit: 100, windowMs: DAY },
+    { key: `widget:file:ip:${ip}`, limit: 30, windowMs: MINUTE },
+  ], 'Too many files. Wait a moment.')
 }
 
 /** Reading: a poll every few seconds fits easily. */

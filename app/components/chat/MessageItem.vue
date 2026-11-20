@@ -51,6 +51,8 @@ const editDraft = computed({
   set: value => ui.setEditDraft(props.message.channelId, value),
 })
 
+/** In a Customer Conversation, a message without a delivery row: it stays with the team. */
+const note = computed(() => props.message.customer?.direction === null && !props.message.deletedAt)
 const actionable = computed(() => !props.contextOnly && !props.message.deletedAt && !props.message.id.startsWith('tmp:'))
 const quickEmoji = computed(() => {
   const recent = Array.isArray(prefs.recentEmoji) ? prefs.recentEmoji : []
@@ -193,6 +195,7 @@ function taskLinkState(link: TaskSourceLinkDTO) {
         </UPopover>
         <UIcon v-if="message.author.kind === 'agent'" name="i-ph-robot" class="size-3.5 self-center text-muted" role="img" :aria-hidden="false" aria-label="Agent" />
         <time class="text-xs text-muted" :datetime="message.createdAt" :title="formatFullDateTime(message.createdAt)">{{ formatMessageTime(message.createdAt) }}</time>
+        <UBadge v-if="note" label="Internal note" color="warning" variant="subtle" size="sm" class="self-center" />
       </div>
       <p v-if="message.deletedAt" class="text-muted italic">Message deleted</p>
       <ChatMessageEditor
@@ -212,6 +215,12 @@ function taskLinkState(link: TaskSourceLinkDTO) {
         <span v-if="message.editedAt" class="ms-1 select-none text-[11px] text-muted" :title="formatFullDateTime(message.editedAt)">(edited)</span>
       </div>
       <AttachmentGallery v-if="!message.deletedAt && message.attachments.length" :attachments="message.attachments" />
+      <p v-if="message.customer?.status === 'pending'" class="mt-0.5 flex items-center gap-1.5 text-xs text-muted" aria-live="polite">
+        <UIcon name="i-ph-circle-notch" class="size-3 animate-spin" /> Delivering…
+      </p>
+      <p v-else-if="message.customer?.status === 'failed'" class="mt-0.5 flex items-center gap-1.5 text-xs text-error" aria-live="polite">
+        <UIcon name="i-ph-warning-circle" class="size-3.5" /> Not delivered. The other side did not get this reply.
+      </p>
       <!-- A message on its way is only dimmed, as in Discord; uploads say so because they can take a while. -->
       <div v-if="message.deliveryState && message.deliveryState !== 'sending'" class="mt-0.5 flex h-5 items-center gap-1.5 text-xs" aria-live="polite">
         <template v-if="message.deliveryState === 'uploading'">

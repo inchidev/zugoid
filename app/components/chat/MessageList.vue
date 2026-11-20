@@ -231,6 +231,8 @@ const editingId = computed(() => ui.composerState(props.channelId).editingId)
 function compactWith(curr: MessageDTO, prev?: MessageDTO) {
   if (!prev || curr.replyTo) return false
   if (prev.author.id !== curr.author.id) return false
+  // In a Customer Conversation a note never runs on from a reply, or the other way round.
+  if (prev.customer?.direction !== curr.customer?.direction) return false
   if (prev.deletedAt) return false
   if (!sameDay(curr.createdAt, prev.createdAt)) return false
   const dt = Math.abs(new Date(curr.createdAt).getTime() - new Date(prev.createdAt).getTime())
@@ -773,7 +775,7 @@ defineExpose({ focusMessage })
               :task-links="taskLinksByMessage.get(m.id)"
               :names="names"
               :member="membersById.get(m.author.id)"
-              :mine="m.author.id === session.user?.id"
+              :mine="m.author.id === session.user?.id && !m.customer?.direction"
               :can-pin="canPinHere"
               :can-thread="canThread(m)"
               :read-only="readOnly"

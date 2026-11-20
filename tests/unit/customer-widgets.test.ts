@@ -1,13 +1,18 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { INIT_SQL } from '../../server/utils/db'
+import { getDb, INIT_SQL } from '../../server/utils/db'
 import type { ServerMembership } from '../../server/utils/channel-access'
 import { listCustomerContacts, mergeCustomerContacts } from '../../server/utils/customers'
 import {
-  createCustomerWidget, listCustomerWidgets, listWidgetConversations, postCustomerConversationMessage, readCustomerConversation,
+  createCustomerWidget, listCustomerWidgets, listSourceConversations, readCustomerConversation,
   setCustomerWidgetMembers, updateCustomerConversation, updateCustomerWidget,
 } from '../../server/utils/customer-widgets'
-import { bearerToken, findPublicWidget, listVisitorMessages, postVisitorMessage, requireVisitor, startVisitorSession } from '../../server/utils/widget-visitors'
+import { hydrateMessages } from '../../server/utils/messages'
+import { conversationFacts, teamMessageStatements } from '../../workers/customer-delivery'
+import { messages } from '../../drizzle/schema'
+import { eq } from 'drizzle-orm'
+import { newId, nowIso } from '../../shared/ids'
+import { bearerToken, findPublicWidget, listVisitorMessages, postVisitorMessage, readVisitorFile, requireVisitor, startVisitorSession, storeVisitorFile } from '../../server/utils/widget-visitors'
 import { widgetFrameHtml, widgetLoaderScript } from '../../server/utils/widget-pages'
 import { normalizeWidgetSite, widgetFrameCsp, widgetSiteAllows } from '../../shared/customer-widgets'
 import { ALL_PERMISSIONS } from '../../shared/permissions'
@@ -17,6 +22,7 @@ import { d1 } from '../helpers/sqlite-d1'
 
 let sqlite: DatabaseSync
 let env: ZugoidEnv
+let stored: Map<string, Uint8Array>
 
 function member(id: string, perms = 0, isOwner = false): ServerMembership {
   return {
@@ -25,6 +31,24 @@ function member(id: string, perms = 0, isOwner = false): ServerMembership {
   } as unknown as ServerMembership
 }
 const owner = () => member('owner', ALL_PERMISSIONS, true)
+
+/** What the channel's socket stores for a team message: a note, or with `deliver` a reply through the Source. */
+async function teamWrites(authorId: string, conversationId: string, content: string, deliver: boolean) {
+  const facts = (await conversationFacts(env, conversationId))!
+  const id = newId()
+  const at = nowIso()
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO messages (id, channel_id, author_id, content, reply_to_id, edited_at, deleted_at, created_at) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)')
+      .bind(id, conversationId, authorId, content, at),
+    ...teamMessageStatements(env, facts, { messageId: id, at, deliver }),
+  ])
+}
+
+/** The Conversation as the team's message list reads it. */
+async function teamReads(conversationId: string) {
+  const rows = await getDb(env.DB).select().from(messages).where(eq(messages.channelId, conversationId)).orderBy(messages.id)
+  return hydrateMessages(env, rows, 'owner')
+}
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:')
@@ -36,7 +60,11 @@ beforeEach(() => {
     INSERT INTO server_identity(singleton,id) VALUES(1,'00000000-0000-4000-8000-000000000001');
     INSERT INTO server(id,name,owner_id) VALUES('00000000-0000-4000-8000-000000000001','Widget test','owner');
   `)
-  env = { DB: d1(sqlite) } as unknown as ZugoidEnv
+  stored = new Map()
+  env = {
+    DB: d1(sqlite),
+    FILES: { put: async (key: string, value: Uint8Array) => { stored.set(key, new Uint8Array(value)) }, get: async (key: string) => stored.has(key) ? { size: stored.get(key)!.byteLength } : null },
+  } as unknown as ZugoidEnv
 })
 
 afterEach(() => sqlite.close())
@@ -85,7 +113,7 @@ describe('a Visitor', () => {
     await postVisitorMessage(env, site, v, { content: 'Second line' })
     expect(sqlite.prepare("SELECT kind, value, verified_at FROM customer_identities").all()).toEqual([{ kind: 'browser', value: v.id, verified_at: null }])
     expect(sqlite.prepare('SELECT name, last_seen_at IS NOT NULL AS seen FROM customer_contacts').all()).toEqual([{ name: 'Visitor 1', seen: 1 }])
-    const conversations = await listWidgetConversations(env, owner(), channelId, 'open')
+    const conversations = await listSourceConversations(env, owner(), channelId, 'open')
     expect(conversations).toEqual([expect.objectContaining({ contactName: 'Visitor 1', preview: 'Second line', status: 'open' })])
     expect(sqlite.prepare("SELECT c.type, c.section, c.parent_id AS parentId FROM channels c WHERE c.type = 'conversation'").all())
       .toEqual([{ type: 'conversation', section: 'customers', parentId: channelId }])
@@ -109,14 +137,15 @@ describe('a Visitor', () => {
     const first = await listVisitorMessages(env, site, v)
     expect(first.messages).toEqual([expect.objectContaining({ direction: 'inbound', content: 'Question', authorName: null })])
     const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
-    await postCustomerConversationMessage(env, owner(), conversationId, { content: 'Internal: VIP customer', kind: 'note' })
-    await postCustomerConversationMessage(env, owner(), conversationId, { content: 'Answer', kind: 'reply' })
+    await teamWrites('owner', conversationId, 'Internal: VIP customer', false)
+    await teamWrites('owner', conversationId, 'Answer', true)
     const next = await listVisitorMessages(env, site, v, first.cursor)
     expect(next.messages).toEqual([expect.objectContaining({ direction: 'outbound', content: 'Answer', authorName: 'Owner' })])
     expect((await listVisitorMessages(env, site, v, next.cursor)).messages).toEqual([])
-    const team = await readCustomerConversation(env, owner(), conversationId)
-    expect(team.messages.map(message => [message.content, message.direction])).toEqual([['Question', 'inbound'], ['Internal: VIP customer', null], ['Answer', 'outbound']])
-    expect(team.visitor).toMatchObject({ country: 'DE' })
+    const team = await teamReads(conversationId)
+    expect(team.map(message => [message.content, message.customer?.direction])).toEqual([['Question', 'inbound'], ['Internal: VIP customer', null], ['Answer', 'outbound']])
+    expect(team[0]!.author.displayName).toBe('Visitor 1')
+    expect((await readCustomerConversation(env, owner(), conversationId)).visitor).toMatchObject({ country: 'DE' })
   })
 
   it('cannot read another Visitor’s Conversation, nor use a token on another Widget', async () => {
@@ -147,10 +176,10 @@ describe('a Visitor', () => {
     const { channelId, public: site } = await widget()
     const { visitor: v } = await visitor(site)
     await postVisitorMessage(env, site, v, { content: 'One' })
-    const [first] = await listWidgetConversations(env, owner(), channelId, 'open')
+    const [first] = await listSourceConversations(env, owner(), channelId, 'open')
     await updateCustomerConversation(env, owner(), first!.channelId, { status: 'waiting', assigneeId: 'agent-smith' })
     await postVisitorMessage(env, site, v, { content: 'Two' })
-    expect(await listWidgetConversations(env, owner(), channelId, 'open')).toEqual([expect.objectContaining({ channelId: first!.channelId, assigneeId: 'agent-smith' })])
+    expect(await listSourceConversations(env, owner(), channelId, 'open')).toEqual([expect.objectContaining({ channelId: first!.channelId, assigneeId: 'agent-smith' })])
     await updateCustomerConversation(env, owner(), first!.channelId, { status: 'resolved' })
     await postVisitorMessage(env, site, v, { content: 'Three' })
     expect(sqlite.prepare('SELECT count(*) AS n FROM customer_conversations').get()).toEqual({ n: 2 })
@@ -167,18 +196,64 @@ describe('a Visitor', () => {
   })
 })
 
+describe('pictures and voice through a Widget', () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+  const ogg = new Uint8Array([0x4f, 0x67, 0x67, 0x53, 0, 2, 0, 0])
+
+  it('takes a picture by its bytes, sends it with the message and lets only that Visitor open it', async () => {
+    const { public: site } = await widget()
+    const a = await visitor(site)
+    const b = await visitor(site)
+    const picture = await storeVisitorFile(env, site, a.visitor, { data: png, filename: 'screen shot.png' })
+    expect(picture).toMatchObject({ contentType: 'image/png', filename: 'screen_shot.png' })
+    await expect(readVisitorFile(env, site, b.visitor, picture.id)).rejects.toMatchObject({ statusCode: 404 })
+    await expect(postVisitorMessage(env, site, b.visitor, { content: '', attachmentIds: [picture.id] })).rejects.toMatchObject({ statusCode: 400 })
+    const message = await postVisitorMessage(env, site, a.visitor, { content: '', attachmentIds: [picture.id] })
+    expect(message.attachments).toEqual([expect.objectContaining({ id: picture.id })])
+    expect((await readVisitorFile(env, site, a.visitor, picture.id)).contentType).toBe('image/png')
+    await expect(readVisitorFile(env, site, b.visitor, picture.id)).rejects.toMatchObject({ statusCode: 404 })
+    const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
+    expect((await teamReads(conversationId))[0]!.attachments).toEqual([expect.objectContaining({ contentType: 'image/png', url: `/api/files/${picture.id}` })])
+    expect((await listVisitorMessages(env, site, a.visitor)).messages[0]!.attachments).toEqual([expect.objectContaining({ id: picture.id })])
+  })
+
+  it('takes a voice recording and refuses anything else', async () => {
+    const { public: site } = await widget()
+    const { visitor: v } = await visitor(site)
+    expect(await storeVisitorFile(env, site, v, { data: ogg, filename: 'voice.ogg' })).toMatchObject({ contentType: 'audio/ogg' })
+    await expect(storeVisitorFile(env, site, v, { data: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), filename: 'invoice.pdf' })).rejects.toMatchObject({ statusCode: 415 })
+    await expect(storeVisitorFile(env, site, v, { data: new TextEncoder().encode('<script>alert(1)</script>'), filename: 'x.png' })).rejects.toMatchObject({ statusCode: 415 })
+  })
+
+  it('opens a team reply’s file for the Visitor, never a note’s', async () => {
+    const { public: site } = await widget()
+    const { visitor: v } = await visitor(site)
+    await postVisitorMessage(env, site, v, { content: 'Hi' })
+    const conversationId = (sqlite.prepare('SELECT channel_id AS id FROM customer_conversations').get() as { id: string }).id
+    await teamWrites('owner', conversationId, 'Look', true)
+    await teamWrites('owner', conversationId, 'Internal', false)
+    const idOf = (content: string) => (sqlite.prepare('SELECT id FROM messages WHERE content = ?').get(content) as { id: string })
+    const [reply, note] = [idOf('Look'), idOf('Internal')]
+    sqlite.exec(`INSERT INTO attachments (id, message_id, channel_id, uploader_id, r2_key, filename, content_type, size_bytes, created_at) VALUES
+      ('file-reply', '${reply!.id}', '${conversationId}', 'owner', 'k1', 'a.png', 'image/png', 1, '2026-11-20'),
+      ('file-note', '${note!.id}', '${conversationId}', 'owner', 'k2', 'b.png', 'image/png', 1, '2026-11-20')`)
+    expect((await readVisitorFile(env, site, v, 'file-reply')).key).toBe('k1')
+    await expect(readVisitorFile(env, site, v, 'file-note')).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
 describe('the team that answers a Widget', () => {
   it('sees its Conversations and Contacts without a Mailbox, and nobody else does', async () => {
     const { channelId, public: site } = await widget()
     const { visitor: v } = await visitor(site)
     await postVisitorMessage(env, site, v, { content: 'Hello' })
-    const [conversation] = await listWidgetConversations(env, owner(), channelId, 'open')
-    await expect(listWidgetConversations(env, member('agent-smith'), channelId, 'open')).rejects.toMatchObject({ statusCode: 404 })
+    const [conversation] = await listSourceConversations(env, owner(), channelId, 'open')
+    await expect(listSourceConversations(env, member('agent-smith'), channelId, 'open')).rejects.toMatchObject({ statusCode: 404 })
     await expect(readCustomerConversation(env, member('agent-smith'), conversation!.channelId)).rejects.toMatchObject({ statusCode: 404 })
     await expect(listCustomerContacts(env, member('agent-smith'))).rejects.toMatchObject({ statusCode: 404 })
     await setCustomerWidgetMembers(env, owner(), channelId, ['agent-smith'])
     expect(await listCustomerContacts(env, member('agent-smith'))).toEqual([expect.objectContaining({ name: 'Visitor 1', conversationCount: 1 })])
-    await postCustomerConversationMessage(env, member('agent-smith'), conversation!.channelId, { content: 'On it', kind: 'reply' })
+    await teamWrites('agent-smith', conversation!.channelId, 'On it', true)
     expect(sqlite.prepare('SELECT user_id FROM channel_members WHERE channel_id = ? ORDER BY user_id').all(channelId)).toEqual([{ user_id: 'agent-smith' }, { user_id: 'owner' }])
   })
 

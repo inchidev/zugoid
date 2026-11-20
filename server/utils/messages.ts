@@ -1,8 +1,9 @@
 import { getServerId } from '../../shared/server-id'
 import { isGroupMentionMarker } from '../../shared/mentions'
-import { and, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
-import { attachments, channels, messageMentions, messagePins, messageReactions, messages, users } from '../../drizzle/schema'
-import type { AttachmentDTO, MessageDTO, MessagePinDTO, PublicUser, ReactionDTO } from '../../shared/types'
+import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { attachments, channels, customerContacts, customerConversations, customerTelegramMessages, customerWidgetMessages, messageMentions, messagePins, messageReactions, messages, users } from '../../drizzle/schema'
+import { CUSTOMER_VISITOR_USER_ID } from '../../shared/customer-widgets'
+import type { AttachmentDTO, CustomerDeliveryDTO, MessageDTO, MessagePinDTO, PublicUser, ReactionDTO } from '../../shared/types'
 import type { ZugoidEnv } from '../../workers/env'
 import { getDb } from './db'
 
@@ -33,9 +34,10 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
   const ids = rows.map((r) => r.id)
   const authorIds = [...new Set(rows.map((r) => r.authorId))]
   const replyIds = rows.map((r) => r.replyToId).filter((x): x is string => Boolean(x))
+  const channelIds = [...new Set(rows.map(r => r.channelId))]
 
   // Every lookup depends only on the page's ids, so they travel together as one request to D1.
-  const [pinRows, authorRows, mentionRows, roleMentionRows, attRows, replyRows, reactionRows, threadRows] = await db.batch([
+  const [pinRows, authorRows, mentionRows, roleMentionRows, attRows, replyRows, reactionRows, threadRows, conversationRows, widgetRows, telegramRows] = await db.batch([
     db.select().from(messagePins).where(inArray(messagePins.messageId, ids)),
     db.select().from(users).where(inArray(users.id, authorIds)),
     db.select().from(messageMentions).where(and(inArray(messageMentions.messageId, ids), isNull(messageMentions.roleId))),
@@ -47,6 +49,17 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
     db.select().from(messageReactions).where(inArray(messageReactions.messageId, ids)),
     // Written out, not bound: the partial index on a Thread's root message needs to see the value.
     db.select({ id: channels.id, parentMessageId: channels.parentMessageId }).from(channels).where(and(sql`${channels.type} = 'thread'`, inArray(channels.parentMessageId, ids))),
+    // In a Customer Conversation: who the other side is, and which messages came in or went out.
+    db.select({ channelId: customerConversations.channelId, contactName: customerContacts.name }).from(customerConversations)
+      .leftJoin(customerContacts, eq(customerContacts.id, customerConversations.contactId)).where(inArray(customerConversations.channelId, channelIds)),
+    db.select({ messageId: customerWidgetMessages.messageId, direction: customerWidgetMessages.direction }).from(customerWidgetMessages).where(inArray(customerWidgetMessages.messageId, ids)),
+    db.select({ messageId: customerTelegramMessages.messageId, direction: customerTelegramMessages.direction, status: customerTelegramMessages.status })
+      .from(customerTelegramMessages).where(inArray(customerTelegramMessages.messageId, ids)),
+  ])
+  const conversations = new Map(conversationRows.map(row => [row.channelId, row.contactName ?? 'Unknown']))
+  const deliveries = new Map<string, CustomerDeliveryDTO>([
+    ...widgetRows.map(row => [row.messageId, { direction: row.direction, status: row.direction === 'inbound' ? 'received' : 'sent' }] as const),
+    ...telegramRows.map(row => [row.messageId, { direction: row.direction, status: row.status }] as const),
   ])
   const authors = new Map(authorRows.map((u) => [u.id, toPublicUser(u)]))
   // Whoever pinned a message is usually one of its authors; look up the rest.
@@ -114,7 +127,7 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
     id: row.id,
     channelId: row.channelId,
     serverId: serverId,
-    author: authors.get(row.authorId) ?? { id: row.authorId, kind: 'human', displayName: 'Unknown', avatarR2Key: null },
+    author: customerAuthor(authors.get(row.authorId) ?? { id: row.authorId, kind: 'human', displayName: 'Unknown', avatarR2Key: null }, conversations.get(row.channelId)),
     content: row.deletedAt ? '' : row.content,
     replyTo: row.replyToId ? replies.get(row.replyToId) ?? null : null,
     mentions: mentions.get(row.id) ?? [],
@@ -126,7 +139,13 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
     editedAt: row.editedAt,
     deletedAt: row.deletedAt,
     createdAt: row.createdAt,
+    ...conversations.has(row.channelId) ? { customer: deliveries.get(row.id) ?? { direction: null, status: null } } : {},
   }))
+}
+
+/** Someone outside writes as one synthetic user; in their Conversation they carry their Contact's name. */
+export function customerAuthor(author: PublicUser, contactName: string | undefined): PublicUser {
+  return contactName !== undefined && author.id === CUSTOMER_VISITOR_USER_ID ? { ...author, displayName: contactName, avatarR2Key: null } : author
 }
 
 export async function auditStatement(

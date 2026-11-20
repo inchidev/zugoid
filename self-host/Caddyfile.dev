@@ -7,7 +7,7 @@
 }
 
 :80 {
-  @backend path /api/* /ws/* /.well-known/* /.zugoid/* /mcp
+  @backend path /api/* /ws/* /.well-known/* /.zugoid/* /mcp /widget/* /telegram/*
   handle @backend {
     reverse_proxy zugoid:8080 {
       header_up -CF-Connecting-IP

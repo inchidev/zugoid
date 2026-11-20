@@ -37,6 +37,8 @@ import {
 } from './live-room'
 import { signalChannelActivity, signalChannelRead } from './channel-activity'
 import { signalAgentsForMessage } from './agent-ingress'
+import { conversationFacts, deliveredMessage, deliversFromChannel, NOTE, outboundDelivery, teamMessageStatements, type ConversationFacts } from './customer-delivery'
+import { pollTelegram, sendTelegramReply } from './customer-telegram'
 import { persistMessageEdit } from './message-edits'
 import { mentionedRoleIds, mentionFanout, roleMentionStatement, type RoleMention } from './role-mentions'
 import { listAgentTurns } from './agent-turns'
@@ -61,6 +63,7 @@ const createSchema = z.object({
   clientId: z.string().min(1).max(80),
   attachmentIds: z.array(z.string().min(8)).max(8).optional(),
   agentMode: z.enum(['queue', 'steer']).optional(),
+  deliver: z.boolean().optional(),
 })
 
 const agentControlSchema = z.object({
@@ -177,6 +180,25 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
 
   override async alarm(): Promise<void> {
     await this.liveInOrder(() => this.liveAlarm())
+    await this.telegramAlarm()
+  }
+
+  /**
+   * A Telegram bot that takes updates by polling asks from its own channel's object: one long
+   * poll per alarm, then the next at once, or later after Telegram refused.
+   */
+  async startTelegramPolling(): Promise<void> {
+    await this.ctx.storage.put('telegramPollAt', Date.now())
+    await this.refreshAlarm()
+  }
+
+  private async telegramAlarm() {
+    const due = await this.ctx.storage.get<number>('telegramPollAt')
+    if (due === undefined || due > Date.now()) return
+    const wait = await pollTelegram(this.env, this.channelId()).catch(() => 60_000)
+    if (wait === null) await this.ctx.storage.delete('telegramPollAt')
+    else await this.ctx.storage.put('telegramPollAt', Date.now() + wait)
+    await this.refreshAlarm()
   }
 
   /** Admission is rechecked even for idle, hibernating sockets after a membership change. */
@@ -635,6 +657,12 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       fail('bad_request', 'Empty message')
       return
     }
+    // In a Customer Conversation a message is a note, or with `deliver` a reply through its Source.
+    const customer = authz.type === 'conversation' ? await conversationFacts(this.env, this.channelId()) : null
+    if (body.deliver && (!customer || !deliversFromChannel(customer.sourceKind))) {
+      fail('bad_request', customer ? 'Answer email from its Mailbox' : 'Only a Customer Conversation delivers a reply')
+      return
+    }
     const idemKey = `idem:${sock.userId}:${body.clientId}`
     const existing = await this.ctx.storage.get<{ id: string; at: number } | string>(idemKey)
     const existingId = typeof existing === 'string' ? existing : existing && Date.now() - existing.at < IDEMPOTENCY_TTL_MS ? existing.id : null
@@ -704,9 +732,11 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       deletedAt: null,
       createdAt,
       clientId: body.clientId,
+      ...customer ? { customer: body.deliver ? outboundDelivery(customer.sourceKind) : NOTE } : {},
     }
 
-    await this.persistMessage(dto, body.replyToId ?? null, roleMentions)
+    const customerRows = customer ? teamMessageStatements(this.env, customer, { messageId: id, at: createdAt, deliver: Boolean(body.deliver) }) : []
+    await this.persistMessage(dto, body.replyToId ?? null, roleMentions, customerRows)
     this.ctx.waitUntil(signalNotificationOutbox(this.env))
     this.ctx.waitUntil(signalChannelActivity(this.env, {
       id,
@@ -720,6 +750,11 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     await this.pruneIdempotency()
     await this.broadcast({ t: 'message', message: dto }, undefined, sock)
     this.send(ws, { t: 'ack', clientId: body.clientId, id })
+    if (customer) {
+      if (body.deliver && customer.sourceKind === 'telegram') this.ctx.waitUntil(this.deliverTelegram(customer, dto))
+      // An Agent answering first in a Conversation is its Source's to decide; Chat's mentions do not start one.
+      return
+    }
     this.ctx.waitUntil(signalAgentsForMessage(this.env, {
       messageId: id,
       channelId: this.channelId(),
@@ -806,11 +841,16 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       return
     }
     if (row.deleted_at) return
+    if (authz.type === 'conversation' && await deliveredMessage(this.env, row.id)) {
+      this.send(ws, { t: 'error', code: 'forbidden', message: 'The other side already has this message' })
+      return
+    }
     const editedAt = nowIso()
     const mentions = await this.validMentions(extractMentionIds(body.content))
     const { content, added, notified } = await persistMessageEdit(this.env, { id: body.id, channelId: this.channelId(), author: sock.user, content: body.content, mentions, editedAt })
     const dto = await this.loadMessage(body.id)
-    if (dto) await this.broadcast({ t: 'message.update', message: dto })
+    // Only a note can be edited in a Conversation.
+    if (dto) await this.broadcast({ t: 'message.update', message: authz.type === 'conversation' ? { ...dto, customer: NOTE } : dto })
     if (notified.length) this.ctx.waitUntil(signalNotificationOutbox(this.env))
     if (added.length) {
       this.ctx.waitUntil(signalAgentsForMessage(this.env, {
@@ -839,6 +879,10 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       return
     }
     if (row.deleted_at) return
+    if (authz.type === 'conversation' && await deliveredMessage(this.env, id)) {
+      this.send(ws, { t: 'error', code: 'forbidden', message: 'The other side already has this message' })
+      return
+    }
     const pinned = await removeChannelMessage(this.env, { id, channelId: row.channel_id, authorId: row.author_id, actorId: sock.userId,
       serverId: authz.serverId, moderator: role === 'moderator' })
     this.ctx.waitUntil(retryDeletedFiles(this.env))
@@ -1248,7 +1292,13 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     return (rows.results ?? []).map((r) => ({ id: r.id, kind: r.kind, displayName: r.display_name, avatarR2Key: r.avatar_r2_key }))
   }
 
-  private async persistMessage(dto: MessageDTO, replyToId: string | null, roleMentions: RoleMention[] = []) {
+  /** Telegram takes a reply after it is stored; the team then sees it sent, or why it was not. */
+  private async deliverTelegram(customer: ConversationFacts, dto: MessageDTO) {
+    const delivery = await sendTelegramReply(this.env, customer, dto)
+    await this.broadcast({ t: 'message.update', message: { ...dto, clientId: undefined, customer: delivery } })
+  }
+
+  private async persistMessage(dto: MessageDTO, replyToId: string | null, roleMentions: RoleMention[] = [], extra: D1PreparedStatement[] = []) {
     const notification = await messageNotificationStatement(this.env, {
       id: dto.id,
       channelId: dto.channelId,
@@ -1279,6 +1329,7 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
             OR channel_reads.last_read_message_id < excluded.last_read_message_id`,
       ).bind(dto.channelId, dto.author.id, dto.id, dto.createdAt),
       ...(notification ? [notification] : []),
+      ...extra,
     ]
     await this.env.DB.batch(statements)
   }
@@ -1432,7 +1483,8 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     const presenceAt = presence.length ? Math.min(...presence) : undefined
     const retries = (await this.liveEndRetries()).map(item => item.at)
     const retryAt = retries.length ? Math.min(...retries) : undefined
-    const candidates = [cleanupAt, ringUntil, presenceAt, retryAt]
+    const telegramPollAt = await this.ctx.storage.get<number>('telegramPollAt')
+    const candidates = [cleanupAt, ringUntil, presenceAt, retryAt, telegramPollAt]
       .filter((value): value is number => typeof value === 'number')
     if (candidates.length) await this.ctx.storage.setAlarm(Math.max(Date.now(), Math.min(...candidates)))
     else await this.ctx.storage.deleteAlarm()

@@ -45,6 +45,16 @@ export function widgetSettingsPath(widgetId: string): string {
   return `/customers/widgets/${widgetId}/settings`
 }
 
+/** A Telegram bot's Conversations with one status, and the open one. The folders are a Widget's. */
+export function telegramPath(botId: string, folder: WidgetFolder = 'open', conversationId?: string): string {
+  const path = `/customers/telegram/${botId}/${folder}`
+  return conversationId ? `${path}?conversation=${conversationId}` : path
+}
+
+export function telegramSettingsPath(botId: string): string {
+  return `/customers/telegram/${botId}/settings`
+}
+
 /** Where boards and their Tasks open. `/tasks` redirects here. */
 export const BOARD_ROUTE = '/projects/board'
 

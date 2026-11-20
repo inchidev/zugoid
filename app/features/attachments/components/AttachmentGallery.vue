@@ -13,7 +13,10 @@ const isMobile = useIsMobile()
 
 const images = computed(() => props.attachments.filter(attachment => attachment.contentType.startsWith('image/')))
 const audio = computed(() => props.attachments.filter(attachment => attachment.contentType.startsWith('audio/')))
-const files = computed(() => props.attachments.filter(attachment => !attachment.contentType.startsWith('image/') && !attachment.contentType.startsWith('audio/')))
+const video = computed(() => props.attachments.filter(attachment => attachment.contentType.startsWith('video/')))
+const files = computed(() => props.attachments.filter(attachment => !['image/', 'audio/', 'video/'].some(kind => attachment.contentType.startsWith(kind))))
+/** Telegram's round video message: square, and shown as a circle as Telegram shows it. */
+const round = (attachment: AttachmentDTO) => Boolean(attachment.width && attachment.width === attachment.height)
 const galleryOpen = ref(false)
 const activeIndex = ref(0)
 const activeImage = computed(() => images.value[activeIndex.value] ?? null)
@@ -71,6 +74,18 @@ onKeyStroke('ArrowRight', (event) => {
         >
       </button>
     </div>
+
+    <video
+      v-for="clip in video"
+      :key="clip.id"
+      :src="serverUrl(clip.url)"
+      :aria-label="clip.filename"
+      controls
+      playsinline
+      preload="metadata"
+      class="block bg-muted"
+      :class="round(clip) ? 'size-56 rounded-full object-cover' : 'max-h-80 max-w-full rounded-md'"
+    />
 
     <div
       v-for="clip in audio"
