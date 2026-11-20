@@ -85,6 +85,7 @@ const views = computed(() => [
   // A Schedule lives in Agents, so its own permission opens the section for someone with no Agents.
   ...(can(Permission.useAgents) || can(Permission.manageAgents) || can(Permission.manageSchedules) ? [{ label: 'Agents', icon: 'i-ph-robot', to: can(Permission.useAgents) || can(Permission.manageAgents) ? '/agents' : '/schedules', path: '/agents', count: 0, dot: false }] : []),
   ...(can(Permission.readData) ? [{ label: 'Data', icon: 'i-ph-stack', to: '/data', path: '/data', count: 0, dot: false }] : []),
+  { label: 'Media', icon: 'i-ph-images', to: '/media', path: '/media', count: 0, dot: false },
   ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
 ].filter(view => !pausedSections.has(serverNavigationSection(view.path)!) && !hiddenSections.value.has(serverNavigationSection(view.path)!)))
 function isViewActive(path: string) {
@@ -312,6 +313,7 @@ watch(nav.inviteOpen, (open) => {
           <LayoutDatabasesNav v-else-if="section === 'data' && can(Permission.readData)" :server-id="serverId" />
           <LayoutGadgetsNav v-else-if="section === 'gadgets' && (can(Permission.useGadgets) || can(Permission.manageGadgets))" :server-id="serverId" />
           <LayoutCustomersNav v-else-if="section === 'customers'" />
+          <LayoutMediaNav v-else-if="section === 'media'" />
         </div>
         <button
           v-if="live.connection === 'connected' && live.currentChannelId"

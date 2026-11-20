@@ -110,6 +110,7 @@ const SPACE_OF = {
   schedule: 'SELECT c.space_id AS spaceId FROM agent_schedules s JOIN channels c ON c.id = s.channel_id WHERE s.id = ?',
   agent: 'SELECT m.space_id AS spaceId FROM space_members m JOIN users u ON u.id = m.user_id AND u.kind = \'agent\' WHERE m.user_id = ? ORDER BY m.joined_at LIMIT 1',
   attachment: 'SELECT c.space_id AS spaceId FROM attachments a JOIN channels c ON c.id = a.channel_id WHERE a.id = ?',
+  media: 'SELECT space_id AS spaceId FROM media_items WHERE id = ?',
 } as const
 export type SpaceResourceKind = keyof typeof SPACE_OF
 

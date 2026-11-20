@@ -26,7 +26,7 @@ describe('Server rail destinations', () => {
   })
 
   it('opens context menus and keeps boards in Tasks, and Projects and Runs in Factory', () => {
-    for (const section of ['tasks', 'factory', 'customers', 'inbox', 'agents', 'gadgets']) {
+    for (const section of ['tasks', 'factory', 'customers', 'inbox', 'agents', 'media', 'gadgets']) {
       expect(serverNavigationSection(`/${section}`)).toBe(section)
       expect(hasServerNavigationMenu(`/${section}`)).toBe(true)
     }

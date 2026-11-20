@@ -130,8 +130,9 @@ export async function deleteSpace(env: ZugoidEnv, member: ServerMembership, spac
     + (SELECT COUNT(*) FROM gadgets WHERE space_id = ?1)
     + (SELECT COUNT(*) FROM mcp_outbound_connections WHERE space_id = ?1)
     + (SELECT COUNT(*) FROM agent_environments WHERE space_id = ?1)
+    + (SELECT COUNT(*) FROM media_items WHERE space_id = ?1)
     + (SELECT COUNT(*) FROM space_members m JOIN users u ON u.id = m.user_id WHERE m.space_id = ?1 AND u.kind = 'agent') AS total`).bind(spaceId).first<{ total: number }>()
-  if (held?.total) fail(409, 'space_not_empty', 'Remove this Space’s conversations, Projects, Data, Apps and Agents before deleting it')
+  if (held?.total) fail(409, 'space_not_empty', 'Remove this Space’s conversations, Projects, Data, Media, Apps and Agents before deleting it')
   await env.DB.batch([
     env.DB.prepare('DELETE FROM channels WHERE space_id = ?').bind(spaceId),
     env.DB.prepare('DELETE FROM task_boards WHERE space_id = ?').bind(spaceId),

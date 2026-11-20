@@ -1507,6 +1507,36 @@ export const taskAttachments = sqliteTable('task_attachments', {
   check('task_attachments_size_check', sql`${table.sizeBytes} > 0`),
 ])
 
+/**
+ * A photo or video in Media: a person's library, apart from any conversation. It lives in one Space;
+ * `visibility` says whether only its owner sees it (`private`) or everyone in the Space (`space`).
+ * `taken_at` is when it was shot, as well as the import could tell (`taken_at_source`), and orders the timeline.
+ * `import_key` makes an import idempotent: the same file from the same person is stored once.
+ */
+export const mediaItems = sqliteTable('media_items', {
+  id: text('id').primaryKey(),
+  spaceId: text('space_id').notNull().references(() => spaces.id, { onDelete: 'cascade' }),
+  ownerId: text('owner_id').notNull().references(() => users.id),
+  visibility: text('visibility').notNull().default('private'),
+  r2Key: text('r2_key').notNull().unique(),
+  thumbR2Key: text('thumb_r2_key'),
+  filename: text('filename').notNull(),
+  contentType: text('content_type').notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  durationMs: integer('duration_ms'),
+  takenAt: text('taken_at').notNull(),
+  takenAtSource: text('taken_at_source').notNull(),
+  importKey: text('import_key'),
+  createdAt: text('created_at').notNull(),
+}, table => [
+  index('media_items_owner_taken_idx').on(table.spaceId, table.ownerId, table.takenAt),
+  index('media_items_visibility_taken_idx').on(table.spaceId, table.visibility, table.takenAt),
+  uniqueIndex('media_items_import_key_idx').on(table.ownerId, table.importKey),
+  check('media_items_size_check', sql`${table.sizeBytes} > 0`),
+])
+
 export const mcpOutboundConnections = sqliteTable('mcp_outbound_connections', {
   spaceId: text('space_id').notNull().default(DEFAULT_SPACE_ID),
   id: text('id').primaryKey(),

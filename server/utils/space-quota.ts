@@ -4,7 +4,8 @@ import { fail } from './cf'
 export type SpaceMonthlyMetric = 'runs' | 'emails' | 'voice'
 const MONTHLY_LIMIT_COLUMN: Record<SpaceMonthlyMetric, string> = { runs: 'monthly_run_limit', emails: 'monthly_email_limit', voice: 'monthly_voice_limit' }
 const STORAGE_SQL = `SELECT COALESCE((SELECT SUM(a.size_bytes) FROM attachments a JOIN channels c ON c.id = a.channel_id WHERE c.space_id = ?1), 0)
-  + COALESCE((SELECT SUM(a.size_bytes) FROM task_attachments a JOIN tasks t ON t.id = a.task_id JOIN task_boards b ON b.id = t.board_id WHERE b.space_id = ?1), 0) AS bytes`
+  + COALESCE((SELECT SUM(a.size_bytes) FROM task_attachments a JOIN tasks t ON t.id = a.task_id JOIN task_boards b ON b.id = t.board_id WHERE b.space_id = ?1), 0)
+  + COALESCE((SELECT SUM(size_bytes) FROM media_items WHERE space_id = ?1), 0) AS bytes`
 
 function quotaExceeded(message: string): never {
   fail(429, 'space_quota', message)
