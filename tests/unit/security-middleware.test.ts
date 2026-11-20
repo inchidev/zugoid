@@ -77,10 +77,10 @@ describe('Server security headers', () => {
   it("adds the Owner's embedding sites to frame-ancestors, but never on the MCP consent page", async () => {
     const { forgetEmbedOrigins } = await import('../../server/utils/server-theme')
     forgetEmbedOrigins()
-    const db = database({ 'embed.origins': JSON.stringify(['https://cgburn.example', 'javascript:alert(1)']) })
+    const db = database({ 'embed.origins': JSON.stringify(['https://partner.example', 'javascript:alert(1)']) })
     const page = event('/chat', { db })
     await middleware(page)
-    expect(page.response['content-security-policy']).toContain("frame-ancestors 'self' https://cgburn.example;")
+    expect(page.response['content-security-policy']).toContain("frame-ancestors 'self' https://partner.example;")
     const consent = event('/mcp/authorize', { db })
     await middleware(consent)
     expect(consent.response['content-security-policy']).toContain("frame-ancestors 'none'")

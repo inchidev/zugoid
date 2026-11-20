@@ -44,9 +44,9 @@ describe('Server theme', () => {
 
 describe('Server embedding', () => {
   it('accepts exact https origins only', () => {
-    expect(embedOrigin('https://CGBurn.example/')).toBe('https://cgburn.example')
+    expect(embedOrigin('https://Partner.example/')).toBe('https://partner.example')
     expect(embedOrigin('https://studio.example:8443')).toBe('https://studio.example:8443')
-    for (const value of ['http://cgburn.example', 'https://*.cgburn.example', 'https://cgburn.example/app', 'https://user@cgburn.example', 'https://localhost', "'self'", 'https://a.example; script-src *']) {
+    for (const value of ['http://partner.example', 'https://*.partner.example', 'https://partner.example/app', 'https://user@partner.example', 'https://localhost', "'self'", 'https://a.example; script-src *']) {
       expect(embedOrigin(value)).toBeNull()
     }
   })

@@ -118,4 +118,8 @@ A DM has two participants inside one Server. Larger conversations use channels, 
 
 ## Subscription
 
-What Zugoid sells: one flat subscription per Server, whatever it holds or does. A Server runs in production free for its first 30 days and then needs its subscription; development and testing never do. Everything the Server uses (Workers, storage, containers, mail, models, calls) stays in the customer's own provider account and is paid there. Zugoid runs no Servers itself. Releases and updates reach a Server through zugoid.com for an account whose subscription covers it. Prices live only on [Pricing](https://zugoid.com/pricing).
+What Zugoid sells: one flat subscription per Server, whatever it holds or does. A Server runs in production free for its first 30 days and then needs its subscription; development and testing never do. On a Server its operator runs, everything it uses (Workers, storage, containers, mail, models, calls) stays in the operator's own provider account and is paid there. Releases and updates reach a Server through zugoid.com for an account whose subscription covers it. Prices live only on [Pricing](https://zugoid.com/pricing).
+
+## Hosted Server and Personal Server
+
+A **hosted Server** is one Zugoid runs itself, through Platform, in a Cloudflare account kept for hosted Servers alone. There are two kinds: a partner product's Servers, under the partner's brand, and **Personal Servers**. A Personal Server belongs to one person, who opens it from Telegram through `@zugoidbot`; it gets a bot of its own and fixed limits, and is free while that one person uses it. A second person makes it a team Server with its subscription, and its Owner can move it to their own Cloudflare account. Every other Server runs in its operator's own provider account.
