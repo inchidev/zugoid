@@ -15,7 +15,7 @@ import { revalidateLiveRooms } from './live'
 import { writeAudit } from './messages'
 
 /**
- * Partner sign-in. A partner's platform (unot today) made this Server for its people, who never set a password here:
+ * Partner sign-in. A partner's platform made this Server for its people, who never set a password here:
  * the partner's backend asks the platform for a ticket, the platform signs it with this Server's own key, and the
  * person opens `<origin>/partner#ticket=…`. The partner is the authority on who belongs: its owner becomes the Owner,
  * its people become Members, and a removal ticket takes a person out. Roles given inside the Server stay local.
