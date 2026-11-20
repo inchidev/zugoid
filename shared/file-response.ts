@@ -1,6 +1,6 @@
 /** Headers shared by new and legacy file rows. Stored MIME types are untrusted. */
 export function fileResponseHeaders(contentType: string, filename: string): Record<string, string> {
-  const safeInline = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/plain', 'audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg', 'video/mp4', 'video/webm'])
+  const safeInline = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf', 'text/plain', 'audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/mpeg', 'video/mp4', 'video/webm', 'video/quicktime', 'video/3gpp', 'image/avif', 'image/heic', 'image/heif'])
   const type = contentType.toLowerCase().split(';')[0]!.trim()
   const inline = safeInline.has(type)
   const name = [...filename].map(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 || char === '"' || char === '\\' ? '_' : char).join('') || 'file'

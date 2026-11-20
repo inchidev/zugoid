@@ -19,7 +19,7 @@ export const THEME_FONT_STACKS: Record<Exclude<ThemeFont, 'default'>, string> = 
 }
 
 /** Sidebar sections a Server can leave out. Chat is always there: it is where the Server opens. */
-export const HIDEABLE_SECTIONS = ['inbox', 'tasks', 'factory', 'customers', 'agents', 'data'] as const satisfies readonly ServerNavigationSection[]
+export const HIDEABLE_SECTIONS = ['inbox', 'tasks', 'factory', 'customers', 'agents', 'data', 'media'] as const satisfies readonly ServerNavigationSection[]
 export type HideableSection = typeof HIDEABLE_SECTIONS[number]
 
 const hexColor = z.string().trim().regex(/^#[0-9a-f]{6}$/iu, 'Use a colour like #1f6feb').transform(value => value.toLowerCase())

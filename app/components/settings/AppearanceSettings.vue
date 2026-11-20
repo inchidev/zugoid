@@ -32,7 +32,7 @@ const accentWarning = computed(() => {
 useHead(() => ({ style: [{ key: 'server-theme-preview', innerHTML: serverThemeCss(theme) }] }))
 
 const SECTION_LABELS: Record<HideableSection, string> = {
-  inbox: 'Inbox', tasks: 'Tasks', factory: 'Factory', customers: 'Customers', agents: 'Agents', data: 'Data',
+  inbox: 'Inbox', tasks: 'Tasks', factory: 'Factory', customers: 'Customers', agents: 'Agents', data: 'Data', media: 'Media',
 }
 const sectionItems = HIDEABLE_SECTIONS.map(value => ({ value, label: SECTION_LABELS[value] }))
 const shownSections = computed<HideableSection[]>({
