@@ -1,6 +1,6 @@
 ---
 title: Media
-description: Keep your photos and videos on your Server, by when they were taken, and import them from your device or a Google Takeout.
+description: Keep your photos and videos on your Server, by when they were taken, and import them from your device.
 order: 8
 ---
 
@@ -18,13 +18,12 @@ Choose **Import** in **My library**, then one of:
 
 - **Photos and videos**: pick files from your device.
 - **A folder**: pick a folder; Media takes the photos and videos in it and in its subfolders.
-- **Google Takeout zips**: pick the zip files of a Takeout export. You do not need to unpack them.
 
-Media takes JPEG, PNG, GIF, WebP, HEIC, AVIF, MP4, MOV and WebM. Everything is read in your browser: a zip is read in place, never unpacked to disk.
+Media takes JPEG, PNG, GIF, WebP, HEIC, AVIF, MP4, MOV and WebM. Everything is read in your browser.
 
-The time a photo was taken comes from the Takeout file that describes it, or else from the photo itself (EXIF), or else from the file's date. A Live Photo's video and an edited copy take the time of their photo.
+The time a photo was taken comes from the photo itself (EXIF), or else from the file's date.
 
-An import can stop and start again. Files already in your library are recognised by name, size and time taken, and skipped without being sent again, so importing the same Takeout twice adds nothing. Files over 95 MB are sent in parts.
+An import can stop and start again. Files already in your library are recognised by name, size and time taken, and skipped without being sent again. Files over 95 MB are sent in parts.
 
 Your browser draws a small preview of each item while importing. A format it cannot draw, such as HEIC outside Safari, is imported without a preview and opens as the original.
 

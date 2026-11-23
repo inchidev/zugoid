@@ -8,5 +8,6 @@
     "target": "ES2022",
     "types": ["chrome"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }
