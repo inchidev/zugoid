@@ -176,7 +176,7 @@ describe('model provider fallback', () => {
     }
     expect(resolveAgentModelId(env as never, '@cf/moonshotai/kimi-k2.7-code')).toBe('your-model')
     expect(resolveAgentModelId(env as never, 'local-model')).toBe('local-model')
-    expect(resolveAgentModelId({ AI: {} } as never, '')).toBe('@cf/moonshotai/kimi-k2.7-code')
+    expect(resolveAgentModelId({ AI: {} } as never, '')).toBe('@cf/zai-org/glm-5.3')
   })
 
   it('returns a chat model object instead of a string when Workers AI is absent', () => {

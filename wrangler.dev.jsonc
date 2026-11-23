@@ -41,6 +41,6 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChannelDurableObject", "ServerDurableObject", "RateLimitDurableObject", "NotificationDurableObject", "ZugoidAgent", "ZugoidThink"] }, { "tag": "v2-agent-runs", "new_sqlite_classes": ["AgentRunDurableObject"] }, { "tag": "v3-agent-schedules", "new_sqlite_classes": ["AgentScheduleDurableObject"] }, { "tag": "v4-retire-think", "deleted_classes": ["ZugoidThink"] },
     { "tag": "v5-factory-executor", "new_sqlite_classes": ["FactoryComputeDurableObject"] }, { "tag": "v6-lizard-compute", "new_sqlite_classes": ["LizardComputeDurableObject"] }, { "tag": "v7-retire-lizard-compute", "deleted_classes": ["LizardComputeDurableObject"] }, { "tag": "v8-portal", "new_sqlite_classes": ["PortalDurableObject"] }],
   "vars": {
-    "AGENT_MODEL": "@cf/moonshotai/kimi-k2.7-code"
+    "AGENT_MODEL": "@cf/zai-org/glm-5.3"
   }
 }
