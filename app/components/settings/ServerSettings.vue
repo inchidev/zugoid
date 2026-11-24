@@ -102,6 +102,7 @@ const updatesQ = useQuery({
 
 const serverNav = computed(() => [
   ...(can(Permission.manageServer) ? [{ id: 'overview' as const, label: 'Overview', icon: 'i-ph-house', keywords: ['name', 'icon', 'rename'] }] : []),
+  ...(isOwner.value ? [{ id: 'modules' as const, label: 'Modules', icon: 'i-ph-squares-four', keywords: ['sections', 'toggle', 'hide', 'disable', 'turn off', 'features'] }] : []),
   ...(can(Permission.manageServer) ? [{ id: 'appearance' as const, label: 'Appearance', icon: 'i-ph-palette', keywords: ['theme', 'colour', 'color', 'accent', 'font', 'branding', 'logo', 'embed', 'iframe', 'white label'] }] : []),
   ...(can(Permission.manageRoles) || can(Permission.kick) ? [{ id: 'members' as const, label: 'Members', icon: 'i-ph-users', keywords: ['people', 'kick', 'assign role'] }] : []),
   ...(can(Permission.invite) && session.health?.authMode !== 'access' ? [{ id: 'invites' as const, label: 'Invites', icon: 'i-ph-user-plus', keywords: ['invite link', 'join', 'share'] }] : []),
@@ -830,6 +831,9 @@ v-if="rolesListVisible || section === 'project-policies'"
       <SettingsAuthSettings :server-id="serverId" />
     </template>
 
+    <template v-else-if="section === 'modules'">
+      <SettingsModulesSettings :server-id="serverId" />
+    </template>
     <template v-else-if="section === 'appearance'">
       <SettingsAppearanceSettings :server-id="serverId" :is-owner="isOwner" />
     </template>

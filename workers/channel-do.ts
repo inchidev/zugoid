@@ -37,7 +37,8 @@ import {
 } from './live-room'
 import { signalChannelActivity, signalChannelRead } from './channel-activity'
 import { signalAgentsForMessage } from './agent-ingress'
-import { conversationFacts, deliveredMessage, deliversFromChannel, NOTE, outboundDelivery, teamMessageStatements, type ConversationFacts } from './customer-delivery'
+import { conversationFacts, deliverMailReply, deliveredMessage, deliversFromChannel, NOTE, outboundDelivery, teamMessageStatements, type ConversationFacts } from './customer-delivery'
+import { channelMailReplyStatements } from '../server/utils/mail-outbound'
 import { pollTelegram, sendTelegramReply } from './customer-telegram'
 import { persistMessageEdit } from './message-edits'
 import { mentionedRoleIds, mentionFanout, roleMentionStatement, type RoleMention } from './role-mentions'
@@ -660,7 +661,7 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     // In a Customer Conversation a message is a note, or with `deliver` a reply through its Source.
     const customer = authz.type === 'conversation' ? await conversationFacts(this.env, this.channelId()) : null
     if (body.deliver && (!customer || !deliversFromChannel(customer.sourceKind))) {
-      fail('bad_request', customer ? 'Answer email from its Mailbox' : 'Only a Customer Conversation delivers a reply')
+      fail('bad_request', customer ? 'This Conversation has no way out' : 'Only a Customer Conversation delivers a reply')
       return
     }
     const idemKey = `idem:${sock.userId}:${body.clientId}`
@@ -736,6 +737,20 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     }
 
     const customerRows = customer ? teamMessageStatements(this.env, customer, { messageId: id, at: createdAt, deliver: Boolean(body.deliver) }) : []
+    if (customer && body.deliver && customer.sourceKind === 'mailbox') {
+      const mailStatements = await channelMailReplyStatements(this.env, {
+        mailboxChannelId: customer.sourceChannelId,
+        threadChannelId: customer.channelId,
+        messageId: id,
+        at: createdAt,
+        clientId: body.clientId,
+      })
+      if (!mailStatements.length) {
+        fail('no_recipient', 'This conversation has no external recipient')
+        return
+      }
+      customerRows.push(...mailStatements)
+    }
     await this.persistMessage(dto, body.replyToId ?? null, roleMentions, customerRows)
     this.ctx.waitUntil(signalNotificationOutbox(this.env))
     this.ctx.waitUntil(signalChannelActivity(this.env, {
@@ -752,6 +767,7 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
     this.send(ws, { t: 'ack', clientId: body.clientId, id })
     if (customer) {
       if (body.deliver && customer.sourceKind === 'telegram') this.ctx.waitUntil(this.deliverTelegram(customer, dto))
+      if (body.deliver && customer.sourceKind === 'mailbox') this.ctx.waitUntil(deliverMailReply(this.env, id))
       // An Agent answering first in a Conversation is its Source's to decide; Chat's mentions do not start one.
       return
     }

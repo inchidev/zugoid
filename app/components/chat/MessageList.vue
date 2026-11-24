@@ -41,6 +41,8 @@ const emit = defineEmits<{
   thread: [msg: MessageDTO]
   read: [messageId: string, generation: number]
   retry: [clientId: string]
+  mailRetry: [msg: MessageDTO]
+  forward: [msg: MessageDTO]
   rootMessage: [message: MessageDTO | null]
 }>()
 
@@ -538,6 +540,9 @@ function actionsFor(message: MessageDTO): DropdownMenuItem[][] {
   ]
   if (mine && !props.readOnly) main.push({ label: 'Edit message', icon: 'i-ph-pencil-simple', onSelect: () => startEdit(message) })
   if (!props.readOnly) main.push({ label: 'Reply', icon: 'i-ph-arrow-bend-up-left', onSelect: () => emit('reply', message.id) })
+  if (message.email && !message.deletedAt && !message.id.startsWith('tmp:')) {
+    main.push({ label: 'Forward', icon: 'i-ph-arrow-bend-double-up-right', onSelect: () => emit('forward', message) })
+  }
   if (canThread(message)) {
     main.push({ label: message.threadId ? 'Open thread' : 'Create thread', icon: 'i-ph-chats', onSelect: () => emit('thread', message) })
   }
@@ -796,6 +801,7 @@ defineExpose({ focusMessage })
               @react="(emoji) => react(m.id, emoji)"
               @pin="togglePin(m)"
               @retry="m.clientId && emit('retry', m.clientId)"
+              @mail-retry="emit('mailRetry', m)"
               @longpress="sheetMessage = m"
             />
           </div>

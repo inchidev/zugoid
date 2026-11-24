@@ -6,6 +6,7 @@ import { spaceSql } from '../../shared/spaces'
 import type { ZugoidEnv } from '../../workers/env'
 import type { ServerMembership } from './channel-access'
 import { fail } from './cf'
+import { mailAddressList } from '../../shared/mail'
 import { readableSources, writableSources } from './customers'
 import { auditStatement } from './messages'
 
@@ -228,14 +229,14 @@ async function findConversation(env: ZugoidEnv, member: ServerMembership, channe
 }
 
 /**
- * A Widget or Telegram Conversation's header for the team: who it is with, as the Visitor
- * says or as Telegram names them. Its messages, notes included, are its channel's.
+ * A Widget, Telegram or Email Conversation's header for the team: who it is with, as the Visitor
+ * says, as Telegram names them, or as the Email thread's subject and people say. Its messages,
+ * notes included, are its channel's.
  */
 export async function readCustomerConversation(env: ZugoidEnv, member: ServerMembership, channelId: string): Promise<CustomerConversationDetailDTO> {
   const row = await findConversation(env, member, channelId)
-  if (row.sourceKind === 'mailbox') fail(404, 'not_found', 'Open email conversations in their Mailbox')
   const { sourceKind, sourceName, spaceId, identityId, writable, ...conversation } = row
-  const [visitor, telegram] = await Promise.all([
+  const [visitor, telegram, email] = await Promise.all([
     identityId && sourceKind === 'widget'
       ? env.DB.prepare(`SELECT claimed_name AS claimedName, claimed_email AS claimedEmail, country, user_agent AS userAgent, last_seen_at AS lastSeenAt
           FROM customer_visitors WHERE identity_id = ? LIMIT 1`).bind(identityId).first<NonNullable<CustomerConversationDetailDTO['visitor']>>()
@@ -244,11 +245,16 @@ export async function readCustomerConversation(env: ZugoidEnv, member: ServerMem
       ? env.DB.prepare(`SELECT value AS userId, display_name AS name FROM customer_identities WHERE id = ? AND kind = 'telegram'`)
           .bind(identityId).first<{ userId: string; name: string | null }>()
       : null,
+    sourceKind === 'mailbox'
+      ? env.DB.prepare(`SELECT subject, participants_json AS participantsJson FROM email_threads WHERE channel_id = ?`)
+          .bind(channelId).first<{ subject: string; participantsJson: string }>()
+      : null,
   ])
   return {
     conversation: { ...conversationDto(conversation), sourceKind, sourceName, spaceId },
     visitor: visitor ?? null,
     telegram: telegram ? { userId: telegram.userId, name: telegram.name || conversation.contactName || 'Telegram' } : null,
+    email: email ? { subject: email.subject, participants: mailAddressList(email.participantsJson) } : null,
     canReply: Boolean(writable),
   }
 }

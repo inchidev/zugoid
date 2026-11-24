@@ -4,12 +4,12 @@ import type { ZugoidEnv } from '../../workers/env'
 import type { AuthorizationContext } from '../../shared/authorization'
 import { spaceSql } from '../../shared/spaces'
 import type { MailboxDTO, MailMessageDTO, MailThreadDTO } from '../../shared/types'
-import { mailThreadUnreadSql, mailAddressList, mailboxGrantPermissionSql, mailDeliveryUncertain } from '../../shared/mail'
+import { mailThreadUnreadSql, mailAddressList, mailboxGrantPermissionSql } from '../../shared/mail'
 import { readableMailContent } from '../../shared/mail-content'
 import { mailMarkdownText } from '../../shared/mail-html'
 import { getDb } from './db'
 import { mailStatusSql } from '../../workers/customer-records'
-import { hydrateMessages } from './messages'
+import { emailDto, hydrateMessages } from './messages'
 
 export async function hydrateMailMessages(env: ZugoidEnv, rows: Array<typeof messages.$inferSelect>, viewerId: string): Promise<MailMessageDTO[]> {
   if (!rows.length) return []
@@ -28,22 +28,7 @@ export async function hydrateMailMessages(env: ZugoidEnv, rows: Array<typeof mes
       author: email?.direction === 'inbound'
         ? { ...message.author, displayName: email.fromName || email.fromAddress }
         : message.author,
-      email: email
-        ? {
-            direction: email.direction,
-            fromAddress: email.fromAddress,
-            fromName: email.fromName,
-            to: mailAddressList(email.toJson),
-            cc: mailAddressList(email.ccJson),
-            bcc: mailAddressList(email.bccJson),
-            replyTo: mailAddressList(email.replyToJson),
-            deliveryStatus: email.deliveryStatus,
-            deliveryError: email.deliveryError,
-            deliveryUncertain: mailDeliveryUncertain(email),
-            ...(email.authVerdict === 'failed' || email.authVerdict === 'unverified' ? { authWarning: email.authVerdict } : {}),
-            format: email.bodyFormat,
-          }
-        : null,
+      email: email ? emailDto(email) : null,
     }
   })
 }

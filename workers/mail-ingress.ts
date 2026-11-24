@@ -7,6 +7,7 @@ import { mailAttachmentFilename, mailAttachmentType, mailFilesAvailable } from '
 import { mailAuthVerdict, trustedAuthResults, type MailAuthResults } from '../shared/mail-auth'
 import { plainMailBody } from '../shared/mail-content'
 import type { ZugoidEnv } from './env'
+import { fanoutStoredMessage } from './customer-delivery'
 import { signalMailChanged } from './mail-events'
 import { mailNotificationStatement, signalNotificationOutbox } from './notifications'
 import { emailPersonStatements, insertConversationStatement, touchConversationStatement } from './customer-records'
@@ -275,6 +276,13 @@ export async function ingestServerEmail(message: ServerEmailEnvelope, env: Zugoi
   }
   catch {
     // The email is stored; open mail views still pick it up on their next refresh.
+  }
+  try {
+    // The email reaches the team's open Conversation over its channel socket, like any other customer message.
+    await fanoutStoredMessage(env, messageId)
+  }
+  catch {
+    // The email is stored; open Conversations pick it up on their next refresh.
   }
   try {
     // Mail filed as Spam or Trash stays quiet, like the Inbox folder that would not list it.

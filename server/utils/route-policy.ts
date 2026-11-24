@@ -389,6 +389,8 @@ export const ROUTE_POLICIES: Readonly<Record<string, RoutePolicy>> = {
   'servers/[id]/mcp-tokens.post': inActiveSpace('mcp-tokens.create'),
   'servers/[id]/mcp-tokens/[tokenId].delete': inActiveSpace('mcp-tokens.delete'),
   'servers/[id]/members.get': inActiveSpace('members.read'),
+  'servers/[id]/modules.get': onServer('modules.read'),
+  'servers/[id]/modules.put': onServer('modules.update'),
   'servers/[id]/members/[userId].delete': onServer('members.delete'),
   'servers/[id]/members/[userId].patch': onServer('members.update'),
   'servers/[id]/members/[userId]/password-reset.post': onServer('members.password-reset'),

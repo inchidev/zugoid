@@ -20,6 +20,35 @@ export async function saveServerTheme(env: ZugoidEnv, auth: AuthorizationContext
 }
 
 /**
+ * The Owner's module switches: which sections this Server leaves out, their pages and their API
+ * with them. The rest of the theme is untouched; the data stays, and showing a section again
+ * brings it all back.
+ */
+export async function saveServerModules(env: ZugoidEnv, auth: AuthorizationContext, hiddenSections: readonly string[]): Promise<ServerTheme> {
+  const theme = serverThemeSchema.parse({ ...(await readServerTheme(env.DB)), hiddenSections })
+  await writeServerSetting(env.DB, SERVER_THEME_KEY, JSON.stringify(theme))
+  forgetHiddenSections()
+  await writeAudit(env, { serverId: auth.serverId, actorId: auth.principal.id, action: 'server.modules.update', targetType: 'server', targetId: auth.serverId, meta: { hiddenSections: theme.hiddenSections }, authorization: auth })
+  return theme
+}
+
+/**
+ * The sections this Server hides, for the API gate. Reads are cheap but every request pays them,
+ * so each isolate holds them for a moment; the Owner's own change is seen at once.
+ */
+const HIDDEN_SECTIONS_CACHE_MS = 5_000
+let hiddenCache: { db: D1Database; at: number; sections: string[] } | null = null
+
+export function forgetHiddenSections() { hiddenCache = null }
+
+export async function hiddenSections(db: D1Database, now = Date.now()): Promise<string[]> {
+  if (hiddenCache && hiddenCache.db === db && now - hiddenCache.at < HIDDEN_SECTIONS_CACHE_MS) return hiddenCache.sections
+  const { hiddenSections } = await readServerTheme(db)
+  hiddenCache = { db, at: now, sections: hiddenSections }
+  return hiddenSections
+}
+
+/**
  * Every response carries `frame-ancestors`, so the Owner's sites are read through a short
  * per-isolate cache. A change made here is seen at once by this isolate and within
  * {@link EMBED_CACHE_MS} by the others.
