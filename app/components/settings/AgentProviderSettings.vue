@@ -39,6 +39,11 @@ function editDeployment() {
   deploymentDraft.limits = value.limits?.owner ? { ...value.limits.owner } : undefined
   deploymentOpen.value = true
 }
+function toggleModel(id: string, selected: boolean | string) {
+  deploymentDraft.selected = selected
+    ? [...new Set([...deploymentDraft.selected, id])]
+    : deploymentDraft.selected.filter(item => item !== id)
+}
 async function saveDeployment() {
   if (busy.value || !deployment.data.value) return
   busy.value = true
@@ -184,7 +189,7 @@ watch(() => state.kind, () => { if (!editing.value) { state.models = []; availab
         <UFormField label="Available to agents"><USwitch v-model="deploymentDraft.enabled" /></UFormField>
         <UFormField v-if="deployment.data.value?.models.length" label="Models" description="Models listed here appear in model pickers.">
           <ul class="divide-y divide-default rounded-md border border-default">
-            <li v-for="model in deployment.data.value.models" :key="model.id" class="px-3 py-2"><UCheckbox v-model="deploymentDraft.selected" :value="model.id" :label="model.label" :description="model.id" :disabled="!deploymentDraft.enabled" /></li>
+            <li v-for="model in deployment.data.value.models" :key="model.id" class="px-3 py-2"><UCheckbox :model-value="deploymentDraft.selected.includes(model.id)" :label="model.label" :description="model.id" :disabled="!deploymentDraft.enabled" @update:model-value="value => toggleModel(model.id, value)" /></li>
           </ul>
         </UFormField>
         <template v-else>
