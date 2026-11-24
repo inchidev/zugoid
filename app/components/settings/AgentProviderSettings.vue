@@ -44,6 +44,13 @@ function toggleModel(id: string, selected: boolean | string) {
     ? [...new Set([...deploymentDraft.selected, id])]
     : deploymentDraft.selected.filter(item => item !== id)
 }
+const allModelsSelected = computed(() => {
+  const models = deployment.data.value?.models
+  return Boolean(models?.length) && deploymentDraft.selected.length === models!.length
+})
+function selectAllModels(selected: boolean) {
+  deploymentDraft.selected = selected ? (deployment.data.value?.models ?? []).map(model => model.id) : []
+}
 async function saveDeployment() {
   if (busy.value || !deployment.data.value) return
   busy.value = true
@@ -188,6 +195,10 @@ watch(() => state.kind, () => { if (!editing.value) { state.models = []; availab
       <div class="space-y-4">
         <UFormField label="Available to agents"><USwitch v-model="deploymentDraft.enabled" /></UFormField>
         <UFormField v-if="deployment.data.value?.models.length" label="Models" description="Models listed here appear in model pickers.">
+          <div class="mb-1 flex justify-end gap-1">
+            <UButton size="xs" color="neutral" variant="ghost" label="Select all" :disabled="!deploymentDraft.enabled || allModelsSelected" @click="selectAllModels(true)" />
+            <UButton size="xs" color="neutral" variant="ghost" label="Deselect all" :disabled="!deploymentDraft.enabled || !deploymentDraft.selected.length" @click="selectAllModels(false)" />
+          </div>
           <ul class="divide-y divide-default rounded-md border border-default">
             <li v-for="model in deployment.data.value.models" :key="model.id" class="px-3 py-2"><UCheckbox :model-value="deploymentDraft.selected.includes(model.id)" :label="model.label" :description="model.id" :disabled="!deploymentDraft.enabled" @update:model-value="value => toggleModel(model.id, value)" /></li>
           </ul>
