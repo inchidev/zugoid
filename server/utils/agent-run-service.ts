@@ -167,8 +167,8 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
     await wakeAdmittedRun(env, run)
     return run
   }
-  const profile = await env.DB.prepare(`SELECT a.harness,a.status,a.model,a.instructions FROM agents a JOIN users u ON u.id=a.user_id WHERE a.user_id=? AND u.status='active'`)
-    .bind(input.agentId).first<{ harness: string; status: string; model: string; instructions: string }>()
+  const profile = await env.DB.prepare(`SELECT a.harness,a.status,a.model,a.instructions,u.display_name as displayName FROM agents a JOIN users u ON u.id=a.user_id WHERE a.user_id=? AND u.status='active'`)
+    .bind(input.agentId).first<{ harness: string; status: string; model: string; instructions: string; displayName: string }>()
   if (!profile || profile.harness !== 'pi' || profile.status !== 'active') fail(409, 'agent_unavailable', 'Choose an active agent')
   if (!agent) fail(403, 'forbidden', 'Agent unavailable')
   if (channelSpaceId && !await spaceMembersOnly(env, channelSpaceId, [input.agentId])) fail(403, 'forbidden', 'Cannot invoke agents')
@@ -266,6 +266,8 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
     mandate.environmentId = environment.id
     mandate.environmentVersion = environment.version
   }
+  // The model never sees the chat UI, so the Run's instructions carry the Agent's name.
+  const instructions = `You are ${profile.displayName}, an AI agent on this Server. ${profile.instructions}`.trim()
   // Counted after every refusal above, so only a Run that will start uses the Space's month.
   const runSpaceId = await spaceOfResource(env, 'channel', input.channelId)
   if (runSpaceId) await consumeSpaceQuota(env, runSpaceId, 'runs', 'Agent Runs')
@@ -275,7 +277,7 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
     AND (? IS NULL OR (SELECT count(*) FROM agent_runs WHERE agent_id=? AND initiated_by=? AND created_at>=?)<?)
     ON CONFLICT(agent_id,initiated_by,idempotency_key) DO NOTHING RETURNING id`)
     .bind(id, session!.id, input.agentId, input.channelId, actor.principal.id, input.taskId ?? null, input.sourceMessageId ?? null, input.idempotencyKey, admissionError ? 'failed' : 'queued',
-      input.prompt, model, profile.instructions, JSON.stringify(mandate), environment ? JSON.stringify(environment) : null,
+      input.prompt, model, instructions, JSON.stringify(mandate), environment ? JSON.stringify(environment) : null,
       new Date(Date.now() + RUN_QUEUE_WAIT_MS).toISOString(), now, now, admissionError, admissionError ? newId() : null, input.agentId, new Date(Date.now() - 86400000).toISOString(), executionPolicy.dailyRuns,
       mandate.parentRunId ?? null, mandate.rootRunId!, (mandate.execution?.maxChildRuns ?? 0) + 1,
       accessBudget, input.agentId, actor.principal.id, accessSince, accessBudget ?? 0).first<{ id: string }>()
