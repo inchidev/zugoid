@@ -1,13 +1,12 @@
 import {
-  isVideoType, MEDIA_PART_BYTES, MEDIA_SINGLE_UPLOAD_BYTES, MEDIA_THUMB_EDGE, matchTakeoutSidecars, mediaImportKey, mediaTypeOfName, takeoutTakenAt,
+  isVideoType, MEDIA_PART_BYTES, MEDIA_SINGLE_UPLOAD_BYTES, MEDIA_THUMB_EDGE, mediaImportKey, mediaTypeOfName,
   type MediaItemDTO, type MediaTakenSource,
 } from '~~/shared/media'
-import { readZipEntries, zipEntryBlob } from './media-zip'
 
 /**
- * Imports photos and videos into Media from what the person picks: single files, a folder, or Google Takeout zips.
- * Everything happens in the browser: the zips are read in place, capture times come from Takeout's sidecars or a
- * photo's EXIF, previews are drawn here, and a file the library already has is skipped before it is sent.
+ * Imports photos and videos into Media from what the person picks: single files or a folder.
+ * Everything happens in the browser: capture times come from a photo's EXIF or the file's date, previews are
+ * drawn here, and a file the library already has is skipped before it is sent.
  */
 
 type Candidate = {
@@ -17,42 +16,17 @@ type Candidate = {
   type: string
   modified: Date | null
   open: () => Promise<Blob>
-  sidecar: (() => Promise<unknown>) | null
 }
 
 export type ImportProgress = { total: number; done: number; skipped: number; failed: number; bytes: number; current: string | null; errors: string[] }
 type Api = <T>(url: string, opts?: Record<string, unknown>) => Promise<T>
 
-const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
-
-/** Everything importable in what was picked, with each media file paired with its Takeout sidecar. */
+/** Everything importable in what was picked. */
 export async function collectCandidates(files: readonly File[]): Promise<Candidate[]> {
   const media: Candidate[] = []
-  const sidecars = new Map<string, () => Promise<unknown>>()
-  const readJson = (open: () => Promise<Blob>) => async () => { try { return JSON.parse(await (await open()).text()) } catch { return null } }
   for (const file of files) {
-    const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-    if (file.name.toLowerCase().endsWith('.zip')) {
-      for (const entry of await readZipEntries(file)) {
-        const entryPath = `${file.name}/${entry.path}`
-        const type = mediaTypeOfName(entry.path)
-        if (type) media.push({ path: entryPath, name: baseName(entry.path), size: entry.size, type, modified: entry.modified, open: () => zipEntryBlob(file, entry, type), sidecar: null })
-        else if (entry.path.toLowerCase().endsWith('.json') && entry.size < 1_000_000) sidecars.set(entryPath, readJson(() => zipEntryBlob(file, entry)))
-      }
-      continue
-    }
     const type = mediaTypeOfName(file.name)
-    if (type) media.push({ path, name: file.name, size: file.size, type, modified: file.lastModified ? new Date(file.lastModified) : null, open: async () => file, sidecar: null })
-    else if (file.name.toLowerCase().endsWith('.json') && file.size < 1_000_000) sidecars.set(path, readJson(async () => file))
-  }
-  // A sidecar names its file within the same archive: compare paths with the archive's own name taken off.
-  const strip = (path: string) => path.replace(/^[^/]+\.zip\//iu, '')
-  const byStripped = new Map(media.map(item => [strip(item.path), item]))
-  const pairs = matchTakeoutSidecars([...byStripped.keys()], [...sidecars.keys()].map(strip))
-  const sidecarByStripped = new Map([...sidecars].map(([path, read]) => [strip(path), read]))
-  for (const [mediaPath, sidecarPath] of pairs) {
-    const item = byStripped.get(mediaPath)
-    if (item) item.sidecar = sidecarByStripped.get(sidecarPath) ?? null
+    if (type) media.push({ path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name, name: file.name, size: file.size, type, modified: file.lastModified ? new Date(file.lastModified) : null, open: async () => file })
   }
   return media
 }
@@ -101,8 +75,6 @@ function readExif(view: DataView, tiff: number): string | null {
 }
 
 async function takenAtOf(candidate: Candidate, blob: Blob): Promise<{ takenAt: string; source: MediaTakenSource }> {
-  const fromSidecar = candidate.sidecar ? takeoutTakenAt(await candidate.sidecar()) : null
-  if (fromSidecar) return { takenAt: fromSidecar, source: 'sidecar' }
   if (candidate.type === 'image/jpeg') {
     const fromExif = await exifTakenAt(blob).catch(() => null)
     if (fromExif) return { takenAt: fromExif, source: 'exif' }
@@ -226,10 +198,10 @@ export async function runMediaImport(api: Api, candidates: Candidate[], progress
   const batchSize = 60
   for (let start = 0; start < candidates.length && !signal.aborted; start += batchSize) {
     const batch = candidates.slice(start, start + batchSize)
-    // Capture time needs only the sidecar or the start of the file; the whole file is read only if it is new.
+    // Capture time needs only the start of the file; the whole file is read only if it is new.
     const keyed = await Promise.all(batch.map(async (candidate) => {
       try {
-        const head = candidate.type === 'image/jpeg' && !candidate.sidecar ? await candidate.open() : new Blob()
+        const head = candidate.type === 'image/jpeg' ? await candidate.open() : new Blob()
         const when = await takenAtOf(candidate, head)
         return { candidate, ...when, key: mediaImportKey(candidate.name, candidate.size, when.takenAt) }
       }

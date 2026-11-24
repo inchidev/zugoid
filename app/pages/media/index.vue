@@ -16,7 +16,7 @@ type Source = 'mine' | 'space' | 'chats'
 const source = computed<Source>(() => route.query.source === 'space' || route.query.source === 'chats' ? route.query.source : 'mine')
 const titles: Record<Source, string> = { mine: 'My library', space: 'Shared in this Space', chats: 'From conversations' }
 const empty: Record<Source, string> = {
-  mine: 'Your photos and videos, by when they were taken. Import them from your device or from a Google Takeout.',
+  mine: 'Your photos and videos, by when they were taken. Import them from your device or a folder.',
   space: 'Nothing here yet. Items someone shares with this Space appear here.',
   chats: 'Photos and videos sent in conversations you are in appear here.',
 }
@@ -100,7 +100,6 @@ function stopImport() { controller?.abort() }
 const importItems = [[
   { label: 'Photos and videos', icon: 'i-ph-images', onSelect: () => filesInput.value?.click() },
   { label: 'A folder', icon: 'i-ph-folder', onSelect: () => folderInput.value?.click() },
-  { label: 'Google Takeout zips', icon: 'i-ph-file-zip', onSelect: () => filesInput.value?.click() },
 ]]
 
 async function picked(event: Event) {
@@ -116,7 +115,7 @@ async function picked(event: Event) {
     const candidates = await collectCandidates(files)
     preparing.value = false
     if (!candidates.length) {
-      toast.add({ title: 'No photos or videos found', description: 'Media takes JPEG, PNG, GIF, WebP, HEIC, AVIF, MP4, MOV and WebM, alone, in a folder or in Takeout zips.', color: 'warning' })
+      toast.add({ title: 'No photos or videos found', description: 'Media takes JPEG, PNG, GIF, WebP, HEIC, AVIF, MP4, MOV and WebM, alone or in a folder.', color: 'warning' })
       return
     }
     await runMediaImport(api, candidates, progress, controller.signal, () => {
@@ -153,7 +152,7 @@ onBeforeRouteLeave(() => {
         </UDropdownMenu>
       </template>
     </LayoutPageHeader>
-    <input ref="filesInput" type="file" multiple accept="image/*,video/*,.heic,.heif,.mov,.zip,.json" class="hidden" @change="picked">
+    <input ref="filesInput" type="file" multiple accept="image/*,video/*,.heic,.heif,.mov" class="hidden" @change="picked">
     <input ref="folderInput" type="file" webkitdirectory class="hidden" @change="picked">
 
     <main class="min-h-0 flex-1 overflow-y-auto">
