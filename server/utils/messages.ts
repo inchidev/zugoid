@@ -1,9 +1,12 @@
 import { getServerId } from '../../shared/server-id'
 import { isGroupMentionMarker } from '../../shared/mentions'
 import { and, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
-import { attachments, channels, customerContacts, customerConversations, customerTelegramMessages, customerWidgetMessages, messageMentions, messagePins, messageReactions, messages, users } from '../../drizzle/schema'
+import { attachments, channels, customerContacts, customerConversations, customerTelegramMessages, customerWidgetMessages, emailMessages, messageMentions, messagePins, messageReactions, messages, users } from '../../drizzle/schema'
 import { CUSTOMER_VISITOR_USER_ID } from '../../shared/customer-widgets'
-import type { AttachmentDTO, CustomerDeliveryDTO, MessageDTO, MessagePinDTO, PublicUser, ReactionDTO } from '../../shared/types'
+import { mailAddressList, mailDeliveryUncertain } from '../../shared/mail'
+import { readableMailContent } from '../../shared/mail-content'
+import { mailMarkdownText } from '../../shared/mail-html'
+import type { AttachmentDTO, CustomerDeliveryDTO, MessageDTO, MessageEmailDTO, MessagePinDTO, PublicUser, ReactionDTO } from '../../shared/types'
 import type { ZugoidEnv } from '../../workers/env'
 import { getDb } from './db'
 
@@ -37,7 +40,7 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
   const channelIds = [...new Set(rows.map(r => r.channelId))]
 
   // Every lookup depends only on the page's ids, so they travel together as one request to D1.
-  const [pinRows, authorRows, mentionRows, roleMentionRows, attRows, replyRows, reactionRows, threadRows, conversationRows, widgetRows, telegramRows] = await db.batch([
+  const [pinRows, authorRows, mentionRows, roleMentionRows, attRows, replyRows, reactionRows, threadRows, conversationRows, widgetRows, telegramRows, emailRows] = await db.batch([
     db.select().from(messagePins).where(inArray(messagePins.messageId, ids)),
     db.select().from(users).where(inArray(users.id, authorIds)),
     db.select().from(messageMentions).where(and(inArray(messageMentions.messageId, ids), isNull(messageMentions.roleId))),
@@ -55,11 +58,14 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
     db.select({ messageId: customerWidgetMessages.messageId, direction: customerWidgetMessages.direction }).from(customerWidgetMessages).where(inArray(customerWidgetMessages.messageId, ids)),
     db.select({ messageId: customerTelegramMessages.messageId, direction: customerTelegramMessages.direction, status: customerTelegramMessages.status })
       .from(customerTelegramMessages).where(inArray(customerTelegramMessages.messageId, ids)),
+    db.select().from(emailMessages).where(inArray(emailMessages.messageId, ids)),
   ])
   const conversations = new Map(conversationRows.map(row => [row.channelId, row.contactName ?? 'Unknown']))
+  const emails = new Map(emailRows.map(row => [row.messageId, row]))
   const deliveries = new Map<string, CustomerDeliveryDTO>([
     ...widgetRows.map(row => [row.messageId, { direction: row.direction, status: row.direction === 'inbound' ? 'received' : 'sent' }] as const),
     ...telegramRows.map(row => [row.messageId, { direction: row.direction, status: row.status }] as const),
+    ...emailRows.map(row => [row.messageId, { direction: row.direction, status: row.deliveryStatus }] as const),
   ])
   const authors = new Map(authorRows.map((u) => [u.id, toPublicUser(u)]))
   // Whoever pinned a message is usually one of its authors; look up the rest.
@@ -123,24 +129,59 @@ export async function hydrateMessages(env: ZugoidEnv, rows: Array<typeof message
   }
 
   const serverId = await getServerId(env.DB)
-  return rows.map((row) => ({
-    id: row.id,
-    channelId: row.channelId,
-    serverId: serverId,
-    author: customerAuthor(authors.get(row.authorId) ?? { id: row.authorId, kind: 'human', displayName: 'Unknown', avatarR2Key: null }, conversations.get(row.channelId)),
-    content: row.deletedAt ? '' : row.content,
-    replyTo: row.replyToId ? replies.get(row.replyToId) ?? null : null,
-    mentions: mentions.get(row.id) ?? [],
-    roleMentions: roleMentions.get(row.id) ?? [],
-    attachments: row.deletedAt ? [] : atts.get(row.id) ?? [],
-    reactions: reactionMap.get(row.id) ?? [],
-    pin: pins.get(row.id) ?? null,
-    threadId: threads.get(row.id) ?? null,
-    editedAt: row.editedAt,
-    deletedAt: row.deletedAt,
-    createdAt: row.createdAt,
-    ...conversations.has(row.channelId) ? { customer: deliveries.get(row.id) ?? { direction: null, status: null } } : {},
-  }))
+  return rows.map((row) => {
+    const email = emails.get(row.id)
+    return {
+      id: row.id,
+      channelId: row.channelId,
+      serverId: serverId,
+      author: emailAuthor(customerAuthor(authors.get(row.authorId) ?? { id: row.authorId, kind: 'human', displayName: 'Unknown', avatarR2Key: null }, conversations.get(row.channelId)), email),
+      content: row.deletedAt ? '' : emailContent(row.content, email),
+      replyTo: row.replyToId ? replies.get(row.replyToId) ?? null : null,
+      mentions: mentions.get(row.id) ?? [],
+      roleMentions: roleMentions.get(row.id) ?? [],
+      attachments: row.deletedAt ? [] : atts.get(row.id) ?? [],
+      reactions: reactionMap.get(row.id) ?? [],
+      pin: pins.get(row.id) ?? null,
+      threadId: threads.get(row.id) ?? null,
+      editedAt: row.editedAt,
+      deletedAt: row.deletedAt,
+      createdAt: row.createdAt,
+      ...conversations.has(row.channelId) ? { customer: deliveries.get(row.id) ?? { direction: null, status: null } } : {},
+      ...(email ? { email: emailDto(email) } : {}),
+    }
+  })
+}
+
+/** The email facts of a message, as Chat and the Mailbox both show them. */
+export function emailDto(email: typeof emailMessages.$inferSelect): MessageEmailDTO {
+  return {
+    direction: email.direction,
+    fromAddress: email.fromAddress,
+    fromName: email.fromName,
+    to: mailAddressList(email.toJson),
+    cc: mailAddressList(email.ccJson),
+    bcc: mailAddressList(email.bccJson),
+    replyTo: mailAddressList(email.replyToJson),
+    deliveryStatus: email.deliveryStatus,
+    deliveryError: email.deliveryError,
+    deliveryUncertain: mailDeliveryUncertain(email),
+    ...(email.authVerdict === 'failed' || email.authVerdict === 'unverified' ? { authWarning: email.authVerdict } : {}),
+    format: email.bodyFormat,
+  }
+}
+
+/** Mail is shown as text: inbound HTML and formatted outbound mail alike, then escaped by the view. */
+function emailContent(content: string, email: typeof emailMessages.$inferSelect | undefined): string {
+  if (!email) return content
+  if (email.direction === 'inbound') return readableMailContent(content)
+  return email.bodyFormat === 'markdown' ? mailMarkdownText(content) : content
+}
+
+/** An inbound email's sender carries their name or address, not the synthetic author's. */
+function emailAuthor(author: PublicUser, email: typeof emailMessages.$inferSelect | undefined): PublicUser {
+  if (!email || email.direction !== 'inbound') return author
+  return { ...author, displayName: email.fromName || email.fromAddress }
 }
 
 /** Someone outside writes as one synthetic user; in their Conversation they carry their Contact's name. */

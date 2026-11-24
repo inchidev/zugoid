@@ -43,6 +43,7 @@ it('resumes SQLite work after SIGKILL mid-tool without repeating an input or an 
       process.disconnect();
     `, resolveDir: process.cwd(), sourcefile: 'recovery-fixture.ts', loader: 'ts' },
     outfile: entry, bundle: true, format: 'esm', platform: 'node', packages: 'external',
+    loader: { '.sql': 'text' },
     plugins: [{ name: 'sqlite-host', setup(builder) {
       builder.onResolve({ filter: /^@earendil-works\/pi-durable\/storage\/sqlite\/cloudflare$/ }, () => ({ path: 'sqlite-host', namespace: 'test' }))
       builder.onLoad({ filter: /.*/, namespace: 'test' }, () => ({ contents: `import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'; export const openDurableObjectSqliteStorage = () => openNodeSqliteStorage(process.env.PI_TEST_DIR + '/pi.sqlite');`, resolveDir: process.cwd(), loader: 'js' }))

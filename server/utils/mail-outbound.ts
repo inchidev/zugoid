@@ -3,7 +3,8 @@ import { sendServerEmail, type ServerEmailAttachment } from '../../workers/mail-
 import { fileStorage } from '../../shared/file-storage'
 import { MAIL_FILES_UNAVAILABLE, mailFilesAvailable } from '../../shared/mail-attachments'
 import { mailHtmlText, mailMarkdownHtml } from '../../shared/mail-html'
-import { mailAddressList, mailReplyRecipients, mailDeliveryUncertain } from '../../shared/mail'
+import { mailAddressList, mailReplyRecipients, mailDeliveryUncertain, mergeMailAddresses } from '../../shared/mail'
+import { emailPersonStatements } from '../../workers/customer-records'
 
 type OutboundRow = {
   messageId: string
@@ -166,4 +167,39 @@ export async function replyThreading(env: ZugoidEnv, threadId: string): Promise<
     inReplyTo: previous.rfcMessageId,
     references: [...new Set([...parseReferences(previous.referencesJson), previous.rfcMessageId])],
   }
+}
+
+/**
+ * The email a delivered reply in a Mailbox's Conversation becomes, as statements for the caller's
+ * batch, so the message and its email row are stored together or not at all. The recipient set is
+ * the mail reply default: Reply-To of the latest inbound, else the conversation's participants.
+ * Chat's composer writes Markdown, so the reply goes out as formatted mail.
+ */
+export async function channelMailReplyStatements(env: ZugoidEnv, input: { mailboxChannelId: string; threadChannelId: string; messageId: string; at: string; clientId?: string | null }): Promise<D1PreparedStatement[]> {
+  const [mailbox, threading, participants] = await Promise.all([
+    env.DB.prepare(
+      `SELECT lower(mb.local_part || '@' || d.domain) as address, mb.display_name as displayName
+       FROM email_mailboxes mb JOIN email_domains d ON d.id = mb.domain_id WHERE mb.channel_id = ?`,
+    ).bind(input.mailboxChannelId).first<{ address: string; displayName: string | null }>(),
+    replyThreading(env, input.threadChannelId),
+    env.DB.prepare('SELECT participants_json AS json FROM email_threads WHERE channel_id = ?').bind(input.threadChannelId).first<{ json: string }>(),
+  ])
+  if (!mailbox) return []
+  const recipients = await replyRecipients(env, input.threadChannelId, mailbox.address, 'reply')
+  if (!recipients.length) return []
+  const nextParticipants = mergeMailAddresses(mailAddressList(participants?.json), recipients)
+  return [
+    env.DB.prepare(
+      `INSERT INTO email_messages
+       (message_id, thread_channel_id, mailbox_channel_id, direction, from_address, from_name, to_json, cc_json, bcc_json,
+        rfc_message_id, in_reply_to, references_json, delivery_status, raw_r2_key, client_request_id, created_at, body_format)
+       VALUES (?, ?, ?, 'outbound', ?, ?, ?, '[]', '[]', NULL, ?, ?, 'pending', NULL, ?, ?, 'markdown')`,
+    ).bind(
+      input.messageId, input.threadChannelId, input.mailboxChannelId, mailbox.address, mailbox.displayName,
+      JSON.stringify(recipients), threading.inReplyTo, JSON.stringify(threading.references), input.clientId ?? null, input.at,
+    ),
+    env.DB.prepare('UPDATE email_threads SET participants_json = ?, updated_at = ? WHERE channel_id = ?')
+      .bind(JSON.stringify(nextParticipants), input.at, input.threadChannelId),
+    ...recipients.flatMap(address => emailPersonStatements(env, { sourceChannelId: input.mailboxChannelId, address, at: input.at, direction: 'outbound' })),
+  ]
 }

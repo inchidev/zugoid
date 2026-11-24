@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useQuery } from '@tanstack/vue-query'
-import { contrastRatio, DEFAULT_SERVER_THEME, HIDEABLE_SECTIONS, serverThemeCss, type HideableSection, type ServerTheme, type ThemeFont } from '~~/shared/server-theme'
+import { contrastRatio, DEFAULT_SERVER_THEME, serverThemeCss, type ServerTheme, type ThemeFont } from '~~/shared/server-theme'
 import { MAX_EMBED_ORIGINS, type ServerEmbedding } from '~~/shared/server-embedding'
 
 const props = defineProps<{ serverId: string; isOwner: boolean }>()
@@ -30,15 +30,6 @@ const accentWarning = computed(() => {
 
 // The page previews the theme while it is edited, and puts the saved one back on leaving.
 useHead(() => ({ style: [{ key: 'server-theme-preview', innerHTML: serverThemeCss(theme) }] }))
-
-const SECTION_LABELS: Record<HideableSection, string> = {
-  inbox: 'Inbox', tasks: 'Tasks', factory: 'Factory', customers: 'Customers', agents: 'Agents', data: 'Data', media: 'Media',
-}
-const sectionItems = HIDEABLE_SECTIONS.map(value => ({ value, label: SECTION_LABELS[value] }))
-const shownSections = computed<HideableSection[]>({
-  get: () => HIDEABLE_SECTIONS.filter(section => !theme.hiddenSections.includes(section)),
-  set: (shown: HideableSection[]) => { theme.hiddenSections = HIDEABLE_SECTIONS.filter(section => !shown.includes(section)) },
-})
 
 function colourModel(key: 'accent' | 'accentDark' | 'signInBackground') {
   return computed({
@@ -126,9 +117,6 @@ function removeOrigin(origin: string) { void saveOrigins(origins.value.filter(it
       </div>
       <UAlert v-if="accentWarning" color="warning" icon="i-ph-warning" :title="accentWarning" />
       <USwitch v-model="theme.hideZugoid" label="Show this Server instead of Zugoid" description="Members see this Server's name and icon on the sign-in page, in the title and while it loads, not Zugoid's." />
-      <UFormField label="Sections" description="What the sidebar shows besides Chat. A hidden section keeps its data, and its links open the Server's start page.">
-        <UCheckboxGroup v-model="shownSections" :items="sectionItems" value-key="value" label-key="label" orientation="horizontal" class="mt-1" :ui="{ fieldset: 'flex-wrap gap-x-4 gap-y-2' }" />
-      </UFormField>
       <div class="flex flex-wrap justify-end gap-2">
         <UButton type="button" color="neutral" variant="ghost" label="Reset to default" @click="resetTheme" />
         <UButton type="submit" label="Save appearance" :loading="themeSaving" />

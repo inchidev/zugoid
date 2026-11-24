@@ -1,25 +1,23 @@
 <script setup lang="ts">
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/vue-query'
-import type { AttachmentDTO, MailboxDTO, MailDraftDTO, MailMessageDTO, MailThreadDTO, MailThreadPageDTO, MailThreadStatus } from '~~/shared/types'
-import { forwardedEmail, mailReplyRecipients, mergeMailAddresses } from '~~/shared/mail'
+import type { AttachmentDTO, MailboxDTO, MailDraftDTO, MailMessageDTO, MailThreadDTO, MailThreadPageDTO } from '~~/shared/types'
+import { forwardedEmail, mergeMailAddresses } from '~~/shared/mail'
 import { formatDateTime } from '~~/shared/format'
 import { isMailFolder, mailPath, type MailFolder } from '~~/shared/paths'
 import type { MailDraftBody } from '~/composables/useMailDraftSaver'
-import { withMailboxUnread, withMessage, withoutMessage, withoutThread, withThreadActivity, withThreadFirst, withThreadRead, type MailThreadDetail, type MailThreadPages } from '~/utils/mail-cache'
 
 const { serverId } = useServer()
 
 definePageMeta({ layout: 'server', middleware: ['auth'] })
 
-const { api, serverUrl } = useApi()
+const { api } = useApi()
 const route = useRoute()
 const qc = useQueryClient()
 const toast = useToast()
 const nav = useNavActions()
-const session = useSessionStore()
 const ui = useUiStore()
 
-/** Mailbox, folder and open thread all live in the URL so the sidebar can link to them. */
+/** Mailbox, folder and open conversation all live in the URL so the sidebar can link to them. */
 const activeMailboxId = computed(() => String(route.params.mailbox || '') || null)
 const folder = computed<MailFolder>(() => {
   const value = String(route.params.folder || 'inbox')
@@ -27,19 +25,6 @@ const folder = computed<MailFolder>(() => {
 })
 const activeThreadId = computed(() => String(route.query.thread || '') || null)
 
-const composerMode = ref<'reply' | 'note'>('reply')
-const replyAll = ref(false)
-const replyTo = ref('')
-const replyToEdited = ref(false)
-/** Addresses typed into a To, Cc or Bcc field, separated by commas, semicolons or spaces. */
-function addressesIn(value: string) { return mergeMailAddresses(value.split(/[;,\s]+/u).filter(Boolean)) }
-const replyAddresses = computed(() => addressesIn(replyTo.value))
-const replyCc = ref('')
-const replyBcc = ref('')
-const replyCopies = ref(false)
-const uncertainRetry = ref<MailMessageDTO | null>(null)
-const draft = ref('')
-const sending = ref(false)
 const composeTo = ref('')
 const composeSubject = ref('')
 const composeBody = ref('')
@@ -47,19 +32,16 @@ const composeCc = ref('')
 const composeBcc = ref('')
 const composeCopies = ref(false)
 const composeFiles = ref<AttachmentDTO[]>([])
-const replyFiles = ref<AttachmentDTO[]>([])
 /** Formatted mail is written in Markdown and sent as sanitized HTML with a text part. */
 const composeFormat = ref<'text' | 'markdown'>('text')
-const replyFormat = ref<'text' | 'markdown'>('text')
 const composeField = ref<{ textareaRef?: HTMLTextAreaElement } | null>(null)
-const replyField = ref<{ textareaRef?: HTMLTextAreaElement } | null>(null)
 const uploadingFiles = ref(0)
+const sending = ref(false)
 /** Searches the open folder of this mailbox. */
 const searchInput = ref('')
 const search = refDebounced(computed(() => searchInput.value.trim()), 300)
 // Each email carries a key; retrying one after a dropped connection reuses it, so it is sent once.
 const newRequestKey = () => crypto.randomUUID()
-const replyKey = ref(newRequestKey())
 const composeKey = ref(newRequestKey())
 
 function openThread(threadId: string | null) {
@@ -96,34 +78,9 @@ const draftsQ = useQuery({
 const drafts = computed(() => draftsQ.data.value?.drafts ?? [])
 const listPending = computed(() => folder.value === 'drafts' ? draftsQ.isPending.value : threadsQ.isPending.value)
 
-function fetchThread(threadId: string) {
-  return api<MailThreadDetail>(`/api/mail/threads/${threadId}`)
-}
-const threadQ = useQuery({
-  queryKey: computed(() => ['mail-thread', activeThreadId.value]),
-  queryFn: () => fetchThread(activeThreadId.value!),
-  enabled: computed(() => Boolean(activeThreadId.value)),
-  staleTime: 15_000,
-  refetchInterval: 60_000,
-  // Show the conversation's subject and people from the list while its messages load.
-  placeholderData: () => {
-    const item = threads.value.find(thread => thread.channelId === activeThreadId.value)
-    return item ? { thread: item, messages: [] } : undefined
-  },
-})
-const thread = computed(() => threadQ.data.value?.thread ?? null)
-const messages = computed(() => threadQ.data.value?.messages ?? [])
-const defaultRecipients = computed(() => mailReplyRecipients(
-  [...messages.value].reverse().find(message => message.email?.direction === 'inbound')?.email ?? null,
-  thread.value?.participants ?? [], activeMailbox.value?.address ?? '', replyAll.value,
-).join(', '))
-watch(defaultRecipients, (value) => { if (!replyToEdited.value) replyTo.value = value }, { immediate: true })
-watch(replyAll, () => { replyToEdited.value = false; replyTo.value = defaultRecipients.value })
-const loadingMessages = computed(() => Boolean(activeThreadId.value) && (threadQ.isPending.value || threadQ.isPlaceholderData.value))
-
-/** Hovering a conversation loads it, so opening it is immediate. Loading does not mark it read. */
+/** Hovering a conversation loads it, so opening it is immediate. */
 function prefetchThread(threadId: string) {
-  void qc.prefetchQuery({ queryKey: ['mail-thread', threadId], queryFn: () => fetchThread(threadId), staleTime: 15_000 })
+  void qc.prefetchQuery({ queryKey: ['customer-conversation', threadId], queryFn: () => api(`/api/customers/conversations/${threadId}`), staleTime: 15_000 })
 }
 
 /** A mailbox that disappeared (access revoked, renamed) shouldn't leave a dead URL. */
@@ -132,234 +89,18 @@ watch([mailboxes, activeMailboxId], ([items, id]) => {
   if (!items.some(item => item.channelId === id)) void navigateTo(mailPath(items[0]!.channelId), { replace: true })
 }, { immediate: true })
 
-/** Whether a conversation with this status still belongs in the open folder. */
-function listedHere(status: MailThreadStatus) {
-  if (folder.value === 'drafts') return true
-  return folder.value === 'sent' ? status !== 'spam' && status !== 'trash' : status === folder.value
-}
-
-/** A conversation moved to another folder elsewhere closes here. */
-watch(() => threadQ.data.value?.thread.status, (status) => {
-  if (status && !threadQ.isPlaceholderData.value && !listedHere(status)) openThread(null)
-})
-
-/**
- * Drafts save a second after typing stops. A reply draft belongs to its conversation
- * and comes back when that conversation is opened again; a new email reopens from Drafts.
- */
-const replySaver = useMailDraftSaver(activeMailboxId)
-const composeSaver = useMailDraftSaver(activeMailboxId)
-/** Addresses exactly as typed, so an unfinished one is kept in the draft. */
-function typedAddresses(value: string) { return value.split(/[;,\s]+/u).filter(Boolean) }
-function forgetDraft(id: string | null) {
-  if (id) qc.setQueryData<{ drafts: MailDraftDTO[] }>(['mail-drafts', activeMailboxId.value], data => data && { drafts: data.drafts.filter(item => item.id !== id) })
-}
-function replyDraftBody(threadId: string): MailDraftBody | null {
-  if (!draft.value.trim() && !replyFiles.value.length) return null
-  return {
-    threadId, to: typedAddresses(replyTo.value), cc: typedAddresses(replyCc.value), bcc: typedAddresses(replyBcc.value),
-    subject: '', content: draft.value, format: replyFormat.value, attachmentIds: replyFiles.value.map(file => file.id),
-  }
-}
-watch([draft, replyTo, replyCc, replyBcc, replyFiles, replyFormat], () => {
-  const threadId = activeThreadId.value
-  if (!threadId || !canSend.value || composerMode.value !== 'reply') return
-  if (replyDraftBody(threadId) || replySaver.savedId.value) replySaver.schedule(() => replyDraftBody(threadId))
-})
-// Notes share the text box; a reply being written is saved before it turns into a note.
-watch(composerMode, (mode) => { if (mode !== 'reply') void replySaver.flush() })
-function restoreReplyDraft() {
-  const saved = drafts.value.find(item => item.threadId && item.threadId === activeThreadId.value)
-  if (!saved || replySaver.savedId.value === saved.id || draft.value.trim()) return
-  replySaver.reset(saved.id)
-  composerMode.value = 'reply'
-  draft.value = saved.content
-  replyFiles.value = saved.attachments
-  replyFormat.value = saved.format
-  if (saved.to.length) { replyTo.value = saved.to.join(', '); replyToEdited.value = true }
-  replyCc.value = saved.cc.join(', ')
-  replyBcc.value = saved.bcc.join(', ')
-  replyCopies.value = Boolean(saved.cc.length || saved.bcc.length)
-}
-watch(drafts, restoreReplyDraft)
-
-async function discardReply() {
-  const files = replyFiles.value
-  const id = await replySaver.settle()
-  if (id) { await replySaver.discard(); forgetDraft(id) }
-  else for (const file of files) void api(`/api/mail/mailboxes/${activeMailboxId.value}/attachments`, { method: 'DELETE', body: { attachmentId: file.id } }).catch(() => {})
-  replySaver.reset()
-  draft.value = ''
-  replyFiles.value = []
-}
-
-watch(activeThreadId, () => {
-  void replySaver.flush()
-  replySaver.reset()
-  replyToEdited.value = false
-  replyAll.value = false
-  replyTo.value = defaultRecipients.value
-  uncertainRetry.value = null
-  draft.value = ''
-  composerMode.value = 'reply'
-  replyKey.value = newRequestKey()
-  replyCc.value = ''
-  replyBcc.value = ''
-  replyCopies.value = false
-  replyFiles.value = []
-  replyFormat.value = 'text'
-  restoreReplyDraft()
-})
 watch(folder, () => { searchInput.value = '' })
 
-/** Marks the open conversation read once its newest message is on screen. */
-const readUpTo = new Map<string, string>()
-watch(() => [activeThreadId.value, threadQ.isPlaceholderData.value ? null : messages.value.at(-1)?.id] as const, ([threadId, latestId]) => {
-  if (!threadId || !latestId || latestId.startsWith('tmp:') || (readUpTo.get(threadId) ?? '') >= latestId) return
-  readUpTo.set(threadId, latestId)
-  const wasUnread = threads.value.find(item => item.channelId === threadId)?.unread
-  qc.setQueriesData<MailThreadPages>({ queryKey: ['mail-threads', activeMailboxId.value] }, data => withThreadRead(data, threadId))
-  if (wasUnread && folder.value === 'inbox' && activeMailboxId.value) {
-    qc.setQueryData<{ mailboxes: MailboxDTO[] }>(['mailboxes'], data => withMailboxUnread(data, activeMailboxId.value!, -1))
-  }
-  void api(`/api/mail/threads/${threadId}/read`, { method: 'POST', body: { messageId: latestId } })
-    .catch(() => readUpTo.delete(threadId))
-}, { immediate: true })
-
-function pendingMessage(threadId: string, content: string, key: string, attachments: AttachmentDTO[]): MailMessageDTO {
-  const user = session.user!
-  return {
-    id: `tmp:${key}`,
-    channelId: threadId,
-    serverId: serverId.value,
-    author: { id: user.id, kind: user.kind, displayName: user.displayName, avatarR2Key: user.avatarR2Key },
-    content,
-    replyTo: null,
-    mentions: [],
-    attachments,
-    reactions: [],
-    pin: null,
-    threadId: null,
-    editedAt: null,
-    deletedAt: null,
-    createdAt: new Date().toISOString(),
-    email: composerMode.value === 'reply'
-      ? {
-          direction: 'outbound',
-          fromAddress: activeMailbox.value?.address ?? '',
-          fromName: activeMailbox.value?.displayName ?? null,
-          to: replyAddresses.value,
-          cc: addressesIn(replyCc.value),
-          bcc: addressesIn(replyBcc.value),
-          deliveryStatus: 'pending',
-          deliveryError: null,
-        }
-      : null,
-  }
-}
-
-function deliveryFailed(message: MailMessageDTO, kind: 'reply' | 'email' = 'reply') {
-  toast.add({
-    title: `Your ${kind} was saved but not delivered`,
-    description: message.email?.deliveryError || 'You can retry it from the conversation.',
-    color: 'error',
-  })
-}
-
-/** The reply shows at once as Sending and is replaced by the saved email when the server answers. */
-async function send() {
-  const threadId = activeThreadId.value
-  const content = draft.value.trim()
-  if (!threadId || !content || !canSend.value || uploadingFiles.value) return
-  const mode = composerMode.value
-  const key = replyKey.value
-  const files = mode === 'reply' ? replyFiles.value : []
-  // The saved draft goes with the reply; the server removes it once the reply is stored.
-  const draftId = mode === 'reply' ? await replySaver.settle() : null
-  if (mode === 'reply') { replySaver.reset(); forgetDraft(draftId) }
-  const pending = pendingMessage(threadId, content, key, files)
-  qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withMessage(detail, pending))
-  draft.value = ''
-  if (mode === 'reply') replyFiles.value = []
-  try {
-    const result = await api<{ message: MailMessageDTO }>(`/api/mail/threads/${threadId}/${mode}`, {
-      method: 'POST',
-      body: mode === 'reply'
-        ? {
-            content, format: replyFormat.value, clientId: key, to: replyAddresses.value, cc: addressesIn(replyCc.value), bcc: addressesIn(replyBcc.value),
-            attachmentIds: files.map(file => file.id), draftId: draftId ?? undefined,
-          }
-        : { content },
-    })
-    replyKey.value = newRequestKey()
-    if (mode === 'reply') { replyCc.value = ''; replyBcc.value = '' }
-    qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withMessage(detail, result.message, pending.id))
-    qc.setQueriesData<MailThreadPages>({ queryKey: ['mail-threads', activeMailboxId.value] }, data => withThreadActivity(data, threadId, result.message))
-    // A first reply puts the conversation in Sent.
-    if (mode === 'reply') void qc.invalidateQueries({ queryKey: ['mail-threads', activeMailboxId.value, 'sent'] })
-    if (result.message.email?.deliveryStatus === 'failed') deliveryFailed(result.message)
-  }
-  catch (error) {
-    // Nothing was confirmed: put the text back so it can be sent again with the same key.
-    qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withoutMessage(detail, pending.id))
-    if (mode === 'reply' && !draft.value) { replySaver.reset(draftId); void draftsQ.refetch() }
-    if (!draft.value) draft.value = content
-    if (mode === 'reply' && !replyFiles.value.length) replyFiles.value = files
-    toast.add({ title: errorMessage(error), color: 'error' })
-  }
-}
-
-async function retry(message: MailMessageDTO, confirmUncertain = false) {
-  if (message.email?.deliveryUncertain && !confirmUncertain) { uncertainRetry.value = message; return }
-  const threadId = activeThreadId.value
-  if (!threadId || !message.email) return
-  uncertainRetry.value = null
-  const sendingAgain = { ...message, email: { ...message.email, deliveryStatus: 'pending' as const, deliveryError: null, deliveryUncertain: false } }
-  qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withMessage(detail, sendingAgain))
-  try {
-    const result = await api<{ message: MailMessageDTO }>(`/api/mail/threads/${threadId}/retry`, { method: 'POST', body: { messageId: message.id, confirmUncertain } })
-    qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withMessage(detail, result.message))
-    if (result.message.email?.deliveryStatus === 'failed') deliveryFailed(result.message, 'email')
-  }
-  catch (error) {
-    qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => withMessage(detail, message))
-    toast.add({ title: errorMessage(error), color: 'error' })
-  }
-}
-
-/**
- * Moving closes the conversation at once and takes it out of every folder it
- * leaves; it comes back if the server refuses. Archiving keeps it in Sent, like Gmail.
- */
-async function move(status: MailThreadStatus) {
-  const threadId = activeThreadId.value
-  const mailboxId = activeMailboxId.value
-  if (!threadId || !mailboxId) return
-  const listKey = ['mail-threads', mailboxId] as const
-  const snapshot = qc.getQueriesData<MailThreadPages>({ queryKey: listKey })
-  for (const [key] of snapshot) {
-    const keepsInSent = key[2] === 'sent' && status !== 'spam' && status !== 'trash'
-    if (!keepsInSent) qc.setQueryData<MailThreadPages>(key, data => withoutThread(data, threadId))
-  }
-  qc.setQueryData<MailThreadDetail>(['mail-thread', threadId], detail => detail && { ...detail, thread: { ...detail.thread, status } })
-  if (!listedHere(status)) openThread(null)
-  try {
-    await api(`/api/mail/threads/${threadId}`, { method: 'PATCH', body: { status } })
-  }
-  catch (error) {
-    for (const [key, data] of snapshot) qc.setQueryData(key, data)
-    toast.add({ title: errorMessage(error), color: 'error' })
-  }
-  finally {
-    void qc.invalidateQueries({ queryKey: listKey })
-    void qc.invalidateQueries({ queryKey: ['mailboxes'] })
-  }
+/** A new email written outside the pane moves the conversation it belongs to; reopen its folder. */
+function conversationChanged() {
+  void qc.invalidateQueries({ queryKey: ['mail-threads', activeMailboxId.value] })
+  void qc.invalidateQueries({ queryKey: ['mailboxes'] })
 }
 
 async function compose() {
   const mailboxId = activeMailboxId.value
   if (!mailboxId || !canSend.value || !composeSubject.value.trim() || !composeBody.value.trim() || uploadingFiles.value) return
-  const to = addressesIn(composeTo.value)
+  const to = mergeMailAddresses(composeTo.value.split(/[;,\s]+/u).filter(Boolean))
   if (!to.length) return
   sending.value = true
   const draftId = await composeSaver.settle()
@@ -367,7 +108,8 @@ async function compose() {
     const result = await api<{ threadId: string; thread: MailThreadDTO; message: MailMessageDTO }>(`/api/mail/mailboxes/${mailboxId}/send`, {
       method: 'POST',
       body: {
-        to, cc: addressesIn(composeCc.value), bcc: addressesIn(composeBcc.value), subject: composeSubject.value.trim(), content: composeBody.value.trim(), format: composeFormat.value,
+        to, cc: mergeMailAddresses(composeCc.value.split(/[;,\s]+/u).filter(Boolean)), bcc: mergeMailAddresses(composeBcc.value.split(/[;,\s]+/u).filter(Boolean)),
+        subject: composeSubject.value.trim(), content: composeBody.value.trim(), format: composeFormat.value,
         attachmentIds: composeFiles.value.map(file => file.id), draftId: draftId ?? undefined, clientId: composeKey.value,
       },
     })
@@ -375,10 +117,9 @@ async function compose() {
     composeSaver.reset()
     forgetDraft(draftId)
     nav.composeOpen.value = false
-    qc.setQueryData<MailThreadDetail>(['mail-thread', result.threadId], { thread: result.thread, messages: [result.message] })
-    // A conversation you start is in Sent; it reaches the Inbox once someone replies.
-    qc.setQueryData<MailThreadPages>(['mail-threads', mailboxId, 'sent', ''], data => withThreadFirst(data, result.thread))
-    if (result.message.email?.deliveryStatus === 'failed') deliveryFailed(result.message, 'email')
+    if (result.message.email?.deliveryStatus === 'failed') {
+      toast.add({ title: 'Your email was saved but not delivered', description: result.message.email.deliveryError || 'You can retry it from the conversation.', color: 'error' })
+    }
     await navigateTo(mailPath(mailboxId, 'sent', result.threadId))
   }
   catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
@@ -386,10 +127,10 @@ async function compose() {
 }
 
 /** Forward opens a new email with the original quoted, like any mail client, and copies its files. */
-async function forward(message: MailMessageDTO) {
+async function forward(message: MailMessageDTO, subject: string) {
   const mailboxId = activeMailboxId.value
   if (!message.email || !mailboxId) return
-  const forwarded = forwardedEmail({ subject: thread.value?.subject ?? '', date: formatDateTime(message.createdAt), content: message.content, ...message.email })
+  const forwarded = forwardedEmail({ subject, date: formatDateTime(message.createdAt), content: message.content, ...message.email })
   composeSaver.reset()
   composeTo.value = ''
   composeCc.value = ''
@@ -414,10 +155,15 @@ async function forward(message: MailMessageDTO) {
   finally { uploadingFiles.value -= 1 }
 }
 
+/** A new email saves a second after typing stops; a reply is written in its Conversation. */
+const composeSaver = useMailDraftSaver(activeMailboxId)
+function forgetDraft(id: string | null) {
+  if (id) qc.setQueryData<{ drafts: MailDraftDTO[] }>(['mail-drafts', activeMailboxId.value], data => data && { drafts: data.drafts.filter(item => item.id !== id) })
+}
 function composeDraftBody(): MailDraftBody | null {
   const empty = !composeTo.value.trim() && !composeCc.value.trim() && !composeBcc.value.trim() && !composeSubject.value.trim() && !composeBody.value.trim() && !composeFiles.value.length
   return empty ? null : {
-    threadId: null, to: typedAddresses(composeTo.value), cc: typedAddresses(composeCc.value), bcc: typedAddresses(composeBcc.value),
+    threadId: null, to: composeTo.value.split(/[;,\s]+/u).filter(Boolean), cc: composeCc.value.split(/[;,\s]+/u).filter(Boolean), bcc: composeBcc.value.split(/[;,\s]+/u).filter(Boolean),
     subject: composeSubject.value, content: composeBody.value, format: composeFormat.value, attachmentIds: composeFiles.value.map(file => file.id),
   }
 }
@@ -442,7 +188,7 @@ watch(() => nav.composeOpen.value, (open) => {
   clearCompose()
 })
 
-/** A reply draft opens in its conversation; a new email opens in the composer. */
+/** A new email draft opens in the composer; a reply draft opens in its conversation. */
 function openDraft(item: MailDraftDTO) {
   if (item.threadId) { openThread(item.threadId); return }
   composeSaver.reset(item.id)
@@ -468,29 +214,15 @@ async function discardCompose() {
 }
 
 function draftTitle(item: MailDraftDTO) {
-  if (item.threadId) return item.threadSubject ? `Re: ${item.threadSubject}` : 'Reply'
   return item.subject.trim() || '(no subject)'
 }
 
 const folderLabel = computed(() => folder.value.charAt(0).toUpperCase() + folder.value.slice(1))
-
-function messageSender(message: MailMessageDTO) {
-  if (!message.email) return message.author.displayName
-  if (message.email.direction === 'outbound') return activeMailbox.value?.displayName || message.email.fromAddress
-  return message.email.fromName || message.email.fromAddress
-}
-
-const deliveryBadge = {
-  pending: { label: 'Sending', color: 'neutral' },
-  sent: { label: 'Sent', color: 'neutral' },
-  failed: { label: 'Not delivered', color: 'error' },
-  received: { label: 'Received', color: 'neutral' },
-} as const
 </script>
 
 <template>
   <div class="h-full min-h-0 min-w-0">
-    <!-- The conversation list is resizable, like the chat panels; the email gets the rest. -->
+    <!-- The conversation list is resizable, like the chat panels; the conversation gets the rest. -->
     <div class="grid h-full min-h-0 min-w-0 grid-cols-1 md:grid-cols-[var(--mail-list-width)_minmax(0,1fr)]" :style="{ '--mail-list-width': `${ui.mailListWidth}px` }">
       <section class="relative min-h-0 border-e border-default" :class="activeThreadId ? 'hidden md:block' : 'block'">
         <LayoutResizeHandle
@@ -574,104 +306,19 @@ const deliveryBadge = {
       </section>
 
       <section class="flex min-h-0 min-w-0 flex-col" :class="activeThreadId ? 'flex' : 'hidden md:flex'">
-        <template v-if="thread">
-          <header class="df-top-row-min flex items-center gap-2 border-b border-default px-3">
-            <UButton icon="i-ph-arrow-left" color="neutral" variant="ghost" square class="md:hidden" aria-label="Back to mail" @click="openThread(null)" />
-            <div class="min-w-0 flex-1">
-              <h2 class="truncate text-sm font-semibold text-highlighted">{{ thread.subject }}</h2>
-              <p class="truncate text-xs text-muted">{{ thread.participants.join(', ') }}</p>
-            </div>
-            <UTooltip text="Archive"><UButton icon="i-ph-archive" color="neutral" variant="ghost" square :disabled="!canSend" @click="move('archive')" /></UTooltip>
-            <UTooltip text="Spam"><UButton icon="i-ph-warning" color="neutral" variant="ghost" square :disabled="!canSend" @click="move('spam')" /></UTooltip>
-            <UTooltip text="Trash"><UButton icon="i-ph-trash" color="neutral" variant="ghost" square :disabled="!canSend" @click="move('trash')" /></UTooltip>
-          </header>
-          <div class="flex-1 space-y-2 overflow-y-auto p-3">
-            <LayoutSkeleton v-if="loadingMessages && !messages.length" variant="messages" :rows="3" />
-            <article v-for="message in messages" :key="message.id" class="rounded-lg border border-default bg-default px-4 py-3">
-              <div class="flex items-start gap-3">
-                <UserAvatar :user="message.author" size="sm" />
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-baseline gap-x-2">
-                    <span class="font-medium text-highlighted">{{ messageSender(message) }}</span>
-                    <UBadge v-if="!message.email" label="Internal note" color="warning" variant="subtle" size="sm" />
-                    <UBadge
-                      v-else-if="message.email.direction === 'outbound'"
-                      :label="message.email.deliveryUncertain ? 'Delivery unknown' : deliveryBadge[message.email.deliveryStatus].label"
-                      :color="deliveryBadge[message.email.deliveryStatus].color"
-                      :icon="message.email.deliveryStatus === 'pending' && !message.email.deliveryUncertain ? 'i-ph-circle-notch' : undefined"
-                      :ui="{ leadingIcon: 'animate-spin' }"
-                      variant="subtle"
-                      size="sm"
-                    />
-                    <span class="text-xs text-muted">{{ formatDateTime(message.createdAt) }}</span>
-                  </div>
-                  <p v-if="message.email" class="mt-0.5 truncate text-xs text-muted">
-                    {{ message.email.direction === 'outbound' ? `To ${message.email.to.join(', ')}` : `From ${message.email.fromAddress}` }}<template v-if="message.email.cc.length"> · Cc {{ message.email.cc.join(', ') }}</template><template v-if="message.email.direction === 'outbound' && message.email.bcc.length"> · Bcc {{ message.email.bcc.join(', ') }}</template>
-                  </p>
-                </div>
-                <UTooltip v-if="message.email && canSend && !message.id.startsWith('tmp:')" text="Forward"><UButton icon="i-ph-arrow-bend-double-up-right" color="neutral" variant="ghost" size="xs" square aria-label="Forward" @click="forward(message)" /></UTooltip>
-              </div>
-              <p class="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-default">{{ message.content }}</p>
-              <p v-if="message.email?.authWarning" role="status" class="mt-3 flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm text-warning">
-                <UIcon name="i-ph-warning" class="mt-0.5 size-4 shrink-0" />
-                <span>{{ message.email.authWarning === 'failed' ? `This email failed the sender's authentication check. It may not be from ${message.email.fromAddress}.` : `Zugoid could not confirm this email is from ${message.email.fromAddress}.` }} It was kept as its own conversation, and a reply goes only to that address.</span>
-              </p>
-              <div v-if="message.email?.deliveryStatus === 'failed' || message.email?.deliveryUncertain" class="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-error/10 px-3 py-2 text-sm text-error">
-                <UIcon name="i-ph-warning-circle" class="size-4 shrink-0" />
-                <span class="min-w-0 flex-1">{{ message.email?.deliveryUncertain ? 'Delivery could not be confirmed. The recipient may already have this email.' : message.email?.deliveryError || 'This email was not delivered.' }}</span>
-                <UButton v-if="canSend" :label="message.email?.deliveryUncertain ? 'Send again…' : 'Retry'" size="xs" color="error" variant="soft" @click="retry(message)" />
-              </div>
-              <div v-if="message.attachments.length" class="mt-4 flex flex-wrap gap-2">
-                <UButton
-                  v-for="attachment in message.attachments"
-                  :key="attachment.id"
-                  :to="serverUrl(attachment.url)"
-                  target="_blank"
-                  :label="attachment.filename"
-                  icon="i-ph-paperclip"
-                  color="neutral"
-                  variant="soft"
-                  size="sm"
-                />
-              </div>
-            </article>
-          </div>
-          <form v-if="canSend" class="border-t border-default p-3" @submit.prevent="send">
-            <div class="mb-2 flex items-center gap-1">
-              <UButton label="Reply" size="xs" color="neutral" :variant="composerMode === 'reply' ? 'soft' : 'ghost'" @click="composerMode = 'reply'" />
-              <UButton v-if="composerMode === 'reply'" :label="replyAll ? 'Reply all' : 'Reply to sender'" size="xs" color="neutral" variant="ghost" @click="replyAll = !replyAll" />
-              <UButton label="Internal note" size="xs" color="warning" :variant="composerMode === 'note' ? 'soft' : 'ghost'" @click="composerMode = 'note'" />
-              <UButton v-if="composerMode === 'reply' && !replyCopies" label="Cc/Bcc" size="xs" color="neutral" variant="ghost" class="ms-auto" @click="replyCopies = true" />
-            </div>
-            <UFormField v-if="composerMode === 'reply'" label="To" hint="Separate addresses with commas" class="mb-2">
-              <UInput v-model="replyTo" class="w-full" @update:model-value="replyToEdited = true" />
-            </UFormField>
-            <div v-if="composerMode === 'reply' && replyCopies" class="mb-2 grid gap-2 sm:grid-cols-2">
-              <UFormField label="Cc"><UInput v-model="replyCc" class="w-full" /></UFormField>
-              <UFormField label="Bcc" hint="Hidden from other recipients"><UInput v-model="replyBcc" class="w-full" /></UFormField>
-            </div>
-            <MailFormatBar v-if="composerMode === 'reply'" v-model="draft" v-model:format="replyFormat" :field="replyField" class="mb-1" />
-            <UTextarea ref="replyField" v-model="draft" :placeholder="composerMode === 'reply' ? 'Reply by email' : 'Write a note for the server'" autoresize :maxrows="8" class="w-full" />
-            <div class="mt-2 flex items-start justify-between gap-2">
-              <MailAttachments v-if="composerMode === 'reply' && activeMailboxId" v-model="replyFiles" v-model:uploading="uploadingFiles" :mailbox-id="activeMailboxId" :available="filesAvailable" class="min-w-0" />
-              <UButton v-if="composerMode === 'reply' && (replySaver.savedId.value || draft.trim())" label="Discard" size="sm" color="neutral" variant="ghost" class="ms-auto shrink-0" @click="discardReply" />
-              <UButton type="submit" class="shrink-0" :class="composerMode === 'reply' && (replySaver.savedId.value || draft.trim()) ? '' : 'ms-auto'" :label="composerMode === 'reply' ? 'Send reply' : 'Add note'" trailing-icon="i-ph-paper-plane-tilt" :disabled="!draft.trim() || uploadingFiles > 0 || (composerMode === 'reply' && !replyAddresses.length)" />
-            </div>
-          </form>
-          <div v-else class="border-t border-default p-4 text-sm text-muted">Read only</div>
-        </template>
-        <LayoutSkeleton v-else-if="activeThreadId && threadQ.isPending.value" variant="messages" :rows="3" class="p-4" />
+        <CustomersConversationPane
+          v-if="activeThreadId"
+          :key="activeThreadId"
+          :conversation-id="activeThreadId"
+          :server-id="serverId"
+          @back="openThread(null)"
+          @changed="conversationChanged"
+          @forward="forward"
+        />
         <div v-else class="grid flex-1 place-items-center text-sm text-muted">Choose a conversation</div>
       </section>
     </div>
 
-    <UModal :open="Boolean(uncertainRetry)" title="Send another copy?" @update:open="value => { if (!value) uncertainRetry = null }">
-      <template #body><p class="text-sm text-muted">The recipient may already have this email. Sending again may deliver a duplicate.</p></template>
-      <template #footer>
-        <UButton label="Cancel" color="neutral" variant="ghost" @click="uncertainRetry = null" />
-        <UButton label="Send another copy" color="warning" @click="uncertainRetry && retry(uncertainRetry, true)" />
-      </template>
-    </UModal>
     <UModal v-model:open="nav.composeOpen.value" title="New email">
       <template #body>
         <div class="space-y-4">

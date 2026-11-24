@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
-import type { ClientMsg, CustomerConversationDetailDTO, CustomerConversationStatus, MemberDTO } from '~~/shared/types'
+import type { ClientMsg, CustomerConversationDetailDTO, CustomerConversationStatus, MailMessageDTO, MemberDTO, MessageDTO } from '~~/shared/types'
 import { formatDateTime } from '~~/shared/format'
 import { errorMessage } from '~/composables/useApi'
 
 /**
- * One Widget or Telegram Conversation. It is a channel like any other, so it reads and writes
+ * One Widget, Telegram or Email Conversation. It is a channel like any other, so it reads and writes
  * with Chat's message list and composer, live over its socket. Reply goes out through the
  * Source; Internal note stays with the team.
  */
@@ -13,7 +13,7 @@ const props = defineProps<{
   conversationId: string
   serverId: string
 }>()
-const emit = defineEmits<{ back: []; changed: [] }>()
+const emit = defineEmits<{ back: []; changed: []; forward: [message: MailMessageDTO, subject: string] }>()
 
 const { api } = useApi()
 const qc = useQueryClient()
@@ -65,6 +65,23 @@ const mode = ref<'reply' | 'note'>('reply')
 watch(() => props.conversationId, () => { mode.value = 'reply' })
 const where = computed(() => detail.value?.conversation.sourceKind === 'telegram' ? 'Telegram' : 'the chat on your site')
 
+/** Retrying an email that failed to go out keeps its human confirmation for uncertain delivery. */
+const uncertainRetry = ref<MailMessageDTO | null>(null)
+async function mailRetry(message: MessageDTO, confirmUncertain = false) {
+  const email = message.email
+  if (!email) return
+  if (email.deliveryUncertain && !confirmUncertain) { uncertainRetry.value = message as MailMessageDTO; return }
+  uncertainRetry.value = null
+  try {
+    await api(`/api/mail/threads/${props.conversationId}/retry`, { method: 'POST', body: { messageId: message.id, confirmUncertain } })
+  }
+  catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
+}
+
+function onForward(message: MessageDTO) {
+  if (message.email) emit('forward', message as MailMessageDTO, detail.value?.email?.subject ?? '')
+}
+
 function onReply(id: string) {
   ui.startReply(props.conversationId, id)
 }
@@ -80,7 +97,8 @@ function onReply(id: string) {
             {{ detail.conversation.contactName }}
           </NuxtLink>
           <h2 v-else class="truncate text-sm font-semibold text-highlighted">{{ detail.conversation.contactName }}</h2>
-          <p v-if="detail.visitor" class="truncate text-xs text-muted">
+          <p v-if="detail.email" class="truncate text-xs text-muted" :title="detail.email.subject">{{ detail.email.subject }} · {{ detail.email.participants.join(', ') }}</p>
+          <p v-else-if="detail.visitor" class="truncate text-xs text-muted">
             <template v-if="detail.visitor.claimedEmail">{{ detail.visitor.claimedEmail }} (not verified) · </template>
             <template v-if="detail.visitor.country">{{ detail.visitor.country }} · </template>
             Last seen {{ formatDateTime(detail.visitor.lastSeenAt) }}
@@ -100,6 +118,8 @@ function onReply(id: string) {
         @reply="onReply"
         @read="(messageId) => send({ t: 'read', messageId } as ClientMsg)"
         @retry="retry"
+        @mail-retry="mailRetry"
+        @forward="onForward"
       />
       <div v-if="detail.canReply" class="border-t border-default" :class="mode === 'note' ? 'bg-warning/5' : ''">
         <div class="flex items-center gap-1 px-3 pt-2 sm:px-5" role="tablist" aria-label="Write">
@@ -121,7 +141,7 @@ function onReply(id: string) {
             :variant="mode === 'note' ? 'soft' : 'ghost'"
             @click="mode = 'note'"
           />
-          <span class="ms-2 truncate text-xs text-muted">{{ mode === 'reply' ? `Goes to ${where}` : 'Only the team sees it' }}</span>
+          <span class="ms-2 truncate text-xs text-muted">{{ mode === 'reply' ? (detail.email ? 'Goes out as an email' : `Goes to ${where}`) : 'Only the team sees it' }}</span>
         </div>
         <ChatComposer
           :channel-id="conversationId"
@@ -139,5 +159,12 @@ function onReply(id: string) {
     </template>
     <LayoutSkeleton v-else-if="detailQ.isPending.value" variant="messages" :rows="3" class="p-4" />
     <LayoutLoadError v-else-if="detailQ.error.value" inline message="This conversation did not load." :retry="detailQ.refetch" />
+    <UModal :open="Boolean(uncertainRetry)" title="Send another copy?" @update:open="value => { if (!value) uncertainRetry = null }">
+      <template #body><p class="text-sm text-muted">The recipient may already have this email. Sending again may deliver a duplicate.</p></template>
+      <template #footer>
+        <UButton label="Cancel" color="neutral" variant="ghost" @click="uncertainRetry = null" />
+        <UButton label="Send another copy" color="warning" @click="uncertainRetry && mailRetry(uncertainRetry, true)" />
+      </template>
+    </UModal>
   </div>
 </template>

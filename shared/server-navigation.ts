@@ -30,3 +30,24 @@ export function serverNavigationSection(path: string): ServerNavigationSection |
 export function hasServerNavigationMenu(path: string): boolean {
   return serverNavigationSection(path) !== null
 }
+
+/** The API paths of each section, for the Server's module switches: a section left out answers 404. */
+const API_MODULE_SEGMENTS: Record<string, ServerNavigationSection> = {
+  inbox: 'inbox',
+  tasks: 'tasks', 'task-attachments': 'tasks', 'task-checklist': 'tasks', 'task-files': 'tasks', boards: 'tasks',
+  projects: 'factory', runs: 'factory', factory: 'factory', 'code-environments': 'factory', 'git-connections': 'factory',
+  'compute-nodes': 'factory', 'compute-agent': 'factory',
+  customers: 'customers', mail: 'customers',
+  agents: 'agents', 'agent-runs': 'agents', schedules: 'agents', 'agent-auth': 'agents',
+  media: 'media',
+  databases: 'data', 'database-fields': 'data', 'database-views': 'data', items: 'data',
+  gadgets: 'gadgets',
+}
+
+/** The section an `/api/...` path belongs to, or null for the Server's own paths, which stay. */
+export function apiModuleSection(path: string): ServerNavigationSection | null {
+  if (!path.startsWith('/api/')) return null
+  const segment = path.split('/')[2] ?? ''
+  if (segment.startsWith('data')) return 'data'
+  return API_MODULE_SEGMENTS[segment] ?? null
+}

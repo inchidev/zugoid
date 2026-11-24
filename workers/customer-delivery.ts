@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm'
 import { messages } from '../drizzle/schema'
 import { getDb } from '../server/utils/db'
 import { hydrateMessages } from '../server/utils/messages'
+import { deliverOutboundEmail } from '../server/utils/mail-outbound'
 import { asRpc, type ZugoidEnv } from './env'
 import { identityContactTouchStatement, touchConversationStatement } from './customer-records'
 
@@ -27,14 +28,14 @@ export async function conversationFacts(env: ZugoidEnv, channelId: string): Prom
   ).bind(channelId).first<ConversationFacts>()
 }
 
-/** Only a Widget and a Telegram bot take replies from the channel; email is answered from its Mailbox. */
+/** A Widget, a Telegram bot and a Mailbox take replies from the channel. */
 export function deliversFromChannel(kind: CustomerSourceKind): boolean {
-  return kind === 'widget' || kind === 'telegram'
+  return kind === 'widget' || kind === 'telegram' || kind === 'mailbox'
 }
 
-/** A Widget reply is delivered once stored: the Visitor reads it from there. Telegram has to take it first. */
+/** A Widget reply is delivered once stored: the Visitor reads it from there. Telegram and email have to take it first. */
 export function outboundDelivery(kind: CustomerSourceKind): CustomerDeliveryDTO {
-  return { direction: 'outbound', status: kind === 'telegram' ? 'pending' : 'sent' }
+  return { direction: 'outbound', status: kind === 'widget' ? 'sent' : 'pending' }
 }
 
 export const NOTE: CustomerDeliveryDTO = { direction: null, status: null }
@@ -72,8 +73,14 @@ export async function fanoutCustomerMessage(env: ZugoidEnv, message: MessageDTO,
 }
 
 /** A message stored outside the channel's socket, hydrated as the team reads it, to the open Conversation. */
-export async function fanoutStoredMessage(env: ZugoidEnv, messageId: string) {
+export async function fanoutStoredMessage(env: ZugoidEnv, messageId: string, event: 'message' | 'message.update' = 'message') {
   const rows = await getDb(env.DB).select().from(messages).where(eq(messages.id, messageId))
   const [dto] = await hydrateMessages(env, rows)
-  if (dto) await fanoutCustomerMessage(env, dto)
+  if (dto) await fanoutCustomerMessage(env, dto, event)
+}
+
+/** An email reply stored in the channel is sent, and the team then sees it sent, or why it was not. */
+export async function deliverMailReply(env: ZugoidEnv, messageId: string) {
+  await deliverOutboundEmail(env, messageId)
+  await fanoutStoredMessage(env, messageId, 'message.update')
 }

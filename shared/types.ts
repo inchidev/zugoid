@@ -494,6 +494,8 @@ export type CustomerConversationDetailDTO = {
   conversation: CustomerSourceConversationDTO & { sourceName: string; sourceKind: CustomerSourceKind; spaceId: string }
   visitor: CustomerVisitorDTO | null
   telegram: CustomerTelegramUserDTO | null
+  /** An Email Conversation's thread: its subject and the addresses in it. */
+  email: { subject: string; participants: string[] } | null
   /** The viewer can reply, add notes and change the status. */
   canReply: boolean
 }
@@ -529,24 +531,27 @@ export type MailThreadDTO = {
   unread: boolean
 }
 
+/** What an Email Conversation adds to its message: who it went to and how delivery went. */
+export type MessageEmailDTO = {
+  direction: 'inbound' | 'outbound'
+  fromAddress: string
+  fromName: string | null
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  replyTo?: string[]
+  deliveryStatus: 'received' | 'pending' | 'sent' | 'failed'
+  /** Why the last delivery attempt failed, when it did. */
+  deliveryError: string | null
+  deliveryUncertain?: boolean
+  /** Inbound mail whose sender could not be confirmed. Absent otherwise. */
+  authWarning?: 'failed' | 'unverified'
+  /** `markdown` was sent as HTML; `content` is its text alternative. */
+  format?: 'text' | 'markdown'
+}
+
 export type MailMessageDTO = MessageDTO & {
-  email: null | {
-    direction: 'inbound' | 'outbound'
-    fromAddress: string
-    fromName: string | null
-    to: string[]
-    cc: string[]
-    bcc: string[]
-    replyTo?: string[]
-    deliveryStatus: 'received' | 'pending' | 'sent' | 'failed'
-    /** Why the last delivery attempt failed, when it did. */
-    deliveryError: string | null
-    deliveryUncertain?: boolean
-    /** Inbound mail whose sender could not be confirmed. Absent otherwise. */
-    authWarning?: 'failed' | 'unverified'
-    /** `markdown` was sent as HTML; `content` is its text alternative. */
-    format?: 'text' | 'markdown'
-  }
+  email: MessageEmailDTO | null
 }
 
 /** An email being written, visible only to its author. A reply draft has a `threadId`. */
@@ -738,6 +743,8 @@ export type MessageDTO = {
   deliveryState?: 'uploading' | 'sending' | 'failed'
   /** Only in a Customer Conversation: whether it came in, went out, or is a note. */
   customer?: CustomerDeliveryDTO
+  /** Only in an Email Conversation: the protocol facts of the email this message is. */
+  email?: MessageEmailDTO | null
 }
 
 export type MessageSearchChannelDTO = {

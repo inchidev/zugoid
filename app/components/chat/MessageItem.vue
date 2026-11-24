@@ -38,6 +38,7 @@ const emit = defineEmits<{
   react: [emoji: string]
   pin: []
   retry: []
+  mailRetry: []
   saveEdit: []
   cancelEdit: []
   longpress: []
@@ -52,7 +53,7 @@ const editDraft = computed({
 })
 
 /** In a Customer Conversation, a message without a delivery row: it stays with the team. */
-const note = computed(() => props.message.customer?.direction === null && !props.message.deletedAt)
+const note = computed(() => props.message.customer?.direction === null && !props.message.email && !props.message.deletedAt)
 const actionable = computed(() => !props.contextOnly && !props.message.deletedAt && !props.message.id.startsWith('tmp:'))
 const quickEmoji = computed(() => {
   const recent = Array.isArray(prefs.recentEmoji) ? prefs.recentEmoji : []
@@ -196,7 +197,11 @@ function taskLinkState(link: TaskSourceLinkDTO) {
         <UIcon v-if="message.author.kind === 'agent'" name="i-ph-robot" class="size-3.5 self-center text-muted" role="img" :aria-hidden="false" aria-label="Agent" />
         <time class="text-xs text-muted" :datetime="message.createdAt" :title="formatFullDateTime(message.createdAt)">{{ formatMessageTime(message.createdAt) }}</time>
         <UBadge v-if="note" label="Internal note" color="warning" variant="subtle" size="sm" class="self-center" />
+        <UBadge v-else-if="message.email?.direction === 'outbound' && message.customer?.status === 'sent'" label="Sent" color="neutral" variant="subtle" size="sm" class="self-center" />
       </div>
+      <p v-if="message.email" class="truncate text-xs text-muted">
+        {{ message.email.direction === 'outbound' ? `To ${message.email.to.join(', ')}` : `From ${message.email.fromAddress}` }}<template v-if="message.email.cc.length"> · Cc {{ message.email.cc.join(', ') }}</template>
+      </p>
       <p v-if="message.deletedAt" class="text-muted italic">Message deleted</p>
       <ChatMessageEditor
         v-else-if="editing"
@@ -218,8 +223,17 @@ function taskLinkState(link: TaskSourceLinkDTO) {
       <p v-if="message.customer?.status === 'pending'" class="mt-0.5 flex items-center gap-1.5 text-xs text-muted" aria-live="polite">
         <UIcon name="i-ph-circle-notch" class="size-3 animate-spin" /> Delivering…
       </p>
-      <p v-else-if="message.customer?.status === 'failed'" class="mt-0.5 flex items-center gap-1.5 text-xs text-error" aria-live="polite">
+      <p v-else-if="message.customer?.status === 'failed' && !message.email" class="mt-0.5 flex items-center gap-1.5 text-xs text-error" aria-live="polite">
         <UIcon name="i-ph-warning-circle" class="size-3.5" /> Not delivered. The other side did not get this reply.
+      </p>
+      <div v-else-if="message.email?.deliveryStatus === 'failed' || message.email?.deliveryUncertain" class="mt-1 flex flex-wrap items-center gap-2 rounded-md bg-error/10 px-3 py-2 text-sm text-error">
+        <UIcon name="i-ph-warning-circle" class="size-4 shrink-0" />
+        <span class="min-w-0 flex-1">{{ message.email.deliveryUncertain ? 'Delivery could not be confirmed. The recipient may already have this email.' : message.email.deliveryError || 'This email was not delivered.' }}</span>
+        <UButton label="Retry" size="xs" color="error" variant="soft" :disabled="readOnly" @click="emit('mailRetry')" />
+      </div>
+      <p v-if="message.email?.authWarning" role="status" class="mt-1 flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm text-warning">
+        <UIcon name="i-ph-warning" class="mt-0.5 size-4 shrink-0" />
+        <span>{{ message.email.authWarning === 'failed' ? `This email failed the sender's authentication check. It may not be from ${message.email.fromAddress}.` : `Zugoid could not confirm this email is from ${message.email.fromAddress}.` }} It was kept as its own conversation, and a reply goes only to that address.</span>
       </p>
       <!-- A message on its way is only dimmed, as in Discord; uploads say so because they can take a while. -->
       <div v-if="message.deliveryState && message.deliveryState !== 'sending'" class="mt-0.5 flex h-5 items-center gap-1.5 text-xs" aria-live="polite">

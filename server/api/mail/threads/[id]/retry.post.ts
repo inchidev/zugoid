@@ -8,6 +8,7 @@ import { loadMailMessage } from '../../../../utils/mail-data'
 import { deliverOutboundEmail } from '../../../../utils/mail-outbound'
 import { serverEmailAvailable } from '../../../../../workers/mail-transport'
 import { signalMailChanged } from '../../../../../workers/mail-events'
+import { fanoutStoredMessage } from '../../../../../workers/customer-delivery'
 
 const schema = z.object({ messageId: z.string().min(8).max(80), confirmUncertain: z.boolean().default(false) })
 
@@ -30,6 +31,8 @@ export default defineEventHandler(async (event): Promise<{ message: MailMessageD
   await requireMailSendLimit(env, access.mailboxId, access.user.id)
   await deliverOutboundEmail(env, body.messageId, { retryUncertain: uncertain && body.confirmUncertain })
   waitUntil(signalMailChanged(env, access.mailboxId, id))
+  // An open Conversation takes the new delivery state over its channel socket.
+  waitUntil(fanoutStoredMessage(env, body.messageId, 'message.update'))
   const message = await loadMailMessage(env, body.messageId, access.user.id)
   if (!message) fail(404, 'not_found', 'Email not found')
   return { message }
