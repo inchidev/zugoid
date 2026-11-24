@@ -214,7 +214,7 @@ export function callsProvider(env: ZugoidEnv): CallsProviderName {
   return 'realtimekit'
 }
 
-export const DEFAULT_WORKERS_MODEL = '@cf/moonshotai/kimi-k2.7-code'
+export const DEFAULT_WORKERS_MODEL = '@cf/zai-org/glm-5.3'
 
 /** Profile ids that start with `@cf/` are Workers AI ids and are not sent to an OpenAI-compatible endpoint. */
 export function resolveAgentModelId(env: ZugoidEnv, profileModel?: string | null): string {

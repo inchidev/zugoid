@@ -126,7 +126,7 @@
         "description": "Optional private 32+ character claim used to create the first owner on the server domain."
       },
       "AGENT_MODEL": {
-        "description": "Default Workers AI model for server agents. The included default is @cf/moonshotai/kimi-k2.7-code."
+        "description": "Default Workers AI model for server agents. The included default is @cf/zai-org/glm-5.3."
       },
       "LIVEKIT_URL": {
         "description": "Optional wss:// address of your own LiveKit for calls. Set with LIVEKIT_API_KEY and LIVEKIT_API_SECRET; it overrides the LiveKit saved in Server settings."
