@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { d1 } from '../helpers/sqlite-d1'
+import { CloudflareGrantError } from '../../shared/cloudflare-oauth'
 import { acceptCloudflareHandoff, cloudflareAccessStatus, cloudflareAccessToken, CLOUDFLARE_HANDOFF_KEY, disconnectCloudflareAccess, saveCloudflareToken } from '../../server/utils/cloudflare-account-access'
 import { sha256Hex } from '../../shared/server-settings'
 import type { ZugoidEnv } from '../../workers/env'
@@ -72,4 +73,31 @@ it('renews a kept grant weekly even before it expires, and ignores pasted tokens
   expect(await renewCloudflareAccess(env, refresh)).toBe(true)
   expect(refresh).toHaveBeenCalledTimes(1)
   expect((await cloudflareAccessToken(env)).token).toBe('access-weekly')
+})
+
+it('marks a refused grant for Settings, keeps the mark through network blips, and clears it on recovery', async () => {
+  await offer('b'.repeat(64))
+  await acceptCloudflareHandoff(env, 'b'.repeat(64), { grant: grant(Date.now() + 30_000), accountId: account }, ok)
+  const denied = vi.fn(async () => { throw new CloudflareGrantError('denied', 'Cloudflare authorization expired. Reconnect Cloudflare.') })
+  await expect(cloudflareAccessToken(env, denied)).rejects.toMatchObject({ data: { error: { code: 'cloudflare_access_expired' } } })
+  expect(await cloudflareAccessStatus(env)).toMatchObject({ connected: true, refusedAt: expect.any(String) })
+  const unreachable = vi.fn(async () => { throw new CloudflareGrantError('unreachable', 'Cloudflare could not be reached. Try again.') })
+  await expect(cloudflareAccessToken(env, unreachable)).rejects.toMatchObject({ data: { error: { code: 'cloudflare_unavailable' } } })
+  expect(await cloudflareAccessStatus(env)).toMatchObject({ refusedAt: expect.any(String) })
+  const refresh = vi.fn(async () => grant(Date.now() + 3600_000, 'access-3'))
+  expect((await cloudflareAccessToken(env, refresh)).token).toBe('access-3')
+  expect(await cloudflareAccessStatus(env)).not.toHaveProperty('refusedAt')
+})
+
+it('a new connection starts with a clean bill of health', async () => {
+  await offer('b'.repeat(64))
+  await acceptCloudflareHandoff(env, 'b'.repeat(64), { grant: grant(Date.now() + 30_000), accountId: account }, ok)
+  const denied = vi.fn(async () => { throw new CloudflareGrantError('denied', 'Cloudflare authorization expired. Reconnect Cloudflare.') })
+  await expect(cloudflareAccessToken(env, denied)).rejects.toMatchObject({ statusCode: 409 })
+  expect(await cloudflareAccessStatus(env)).toMatchObject({ refusedAt: expect.any(String) })
+  await offer('9'.repeat(64))
+  await acceptCloudflareHandoff(env, '9'.repeat(64), { grant: grant(Date.now() + 3600_000), accountId: account }, ok)
+  expect(await cloudflareAccessStatus(env)).not.toHaveProperty('refusedAt')
+  await disconnectCloudflareAccess(env)
+  expect(await cloudflareAccessStatus(env)).toEqual({ connected: false })
 })

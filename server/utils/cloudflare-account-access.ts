@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { cloudflareGrantSchema, refreshCloudflareGrant, type CloudflareGrant } from '../../shared/cloudflare-oauth'
+import { cloudflareGrantSchema, CloudflareGrantError, refreshCloudflareGrant, type CloudflareGrant } from '../../shared/cloudflare-oauth'
 import { decryptSecret, encryptSecret, type EncryptedSecret } from '../../shared/encrypted-secret'
-import { readServerSetting, sha256Hex } from '../../shared/server-settings'
+import { readServerSetting, sha256Hex, writeServerSetting } from '../../shared/server-settings'
 import type { ZugoidEnv } from '../../workers/env'
 import { authSecret } from './auth-config'
 import { fail } from './cf'
@@ -16,12 +16,14 @@ import { fail } from './cf'
 export const CLOUDFLARE_ACCESS_KEY = 'cloudflare.access'
 /** The installer writes only this hash over D1; the matching token is used once. */
 export const CLOUDFLARE_HANDOFF_KEY = 'cloudflare.access.handoff'
+/** When Cloudflare refused the kept grant, so Settings can say so before anything needs it. */
+export const CLOUDFLARE_HEALTH_KEY = 'cloudflare.access.health'
 const scope = 'cloudflare-account'
 const API = 'https://api.cloudflare.com/client/v4'
 
 export type CloudflareAccess = { kind: 'oauth'; grant: CloudflareGrant; accountId: string; connectedAt: string }
   | { kind: 'token'; token: string; accountId: string; connectedAt: string }
-export type CloudflareAccessStatus = { connected: false } | { connected: true; kind: CloudflareAccess['kind']; accountId: string; connectedAt: string }
+export type CloudflareAccessStatus = { connected: false } | { connected: true; kind: CloudflareAccess['kind']; accountId: string; connectedAt: string; refusedAt?: string }
 
 type Stored = { value: string; access: CloudflareAccess }
 async function load(env: ZugoidEnv): Promise<Stored | null> {
@@ -34,9 +36,20 @@ async function seal(env: ZugoidEnv, access: CloudflareAccess) {
   return JSON.stringify(await encryptSecret(authSecret(env), scope, JSON.stringify(access)))
 }
 
+async function markRefused(env: ZugoidEnv) {
+  await writeServerSetting(env.DB, CLOUDFLARE_HEALTH_KEY, JSON.stringify({ refusedAt: new Date().toISOString() }))
+}
+async function clearRefused(env: ZugoidEnv) {
+  await env.DB.prepare('DELETE FROM server_settings WHERE key=?').bind(CLOUDFLARE_HEALTH_KEY).run()
+}
+
 export async function cloudflareAccessStatus(env: ZugoidEnv): Promise<CloudflareAccessStatus> {
   const stored = await load(env)
-  return stored ? { connected: true, kind: stored.access.kind, accountId: stored.access.accountId, connectedAt: stored.access.connectedAt } : { connected: false }
+  if (!stored) return { connected: false }
+  const raw = await readServerSetting(env.DB, CLOUDFLARE_HEALTH_KEY)
+  let refusedAt: string | undefined
+  try { refusedAt = raw ? z.object({ refusedAt: z.string() }).parse(JSON.parse(raw)).refusedAt : undefined } catch { /* a unread marker never hides a working connection */ }
+  return { connected: true, kind: stored.access.kind, accountId: stored.access.accountId, connectedAt: stored.access.connectedAt, ...(refusedAt ? { refusedAt } : {}) }
 }
 
 /** The access must reach this Server's own account; a token for another account is refused. */
@@ -53,6 +66,7 @@ async function store(env: ZugoidEnv, access: CloudflareAccess, previous: string 
     ? await env.DB.prepare('INSERT INTO server_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at RETURNING key').bind(CLOUDFLARE_ACCESS_KEY, sealed, now).first()
     // Conditional so two refreshes never overwrite a newer rotated grant with an older one.
     : await env.DB.prepare('UPDATE server_settings SET value=?,updated_at=? WHERE key=? AND value=? RETURNING key').bind(sealed, now, CLOUDFLARE_ACCESS_KEY, previous).first()
+  if (written && previous === null) await clearRefused(env)
   return Boolean(written)
 }
 
@@ -78,7 +92,7 @@ export async function acceptCloudflareHandoff(env: ZugoidEnv, handoffToken: stri
 }
 
 export async function disconnectCloudflareAccess(env: ZugoidEnv) {
-  await env.DB.prepare('DELETE FROM server_settings WHERE key IN (?,?)').bind(CLOUDFLARE_ACCESS_KEY, CLOUDFLARE_HANDOFF_KEY).run()
+  await env.DB.prepare('DELETE FROM server_settings WHERE key IN (?,?,?)').bind(CLOUDFLARE_ACCESS_KEY, CLOUDFLARE_HANDOFF_KEY, CLOUDFLARE_HEALTH_KEY).run()
 }
 
 /** A usable Cloudflare API bearer token, refreshing and re-sealing a rotated OAuth grant. */
@@ -91,7 +105,15 @@ export async function cloudflareAccessToken(env: ZugoidEnv, refresh: typeof refr
     if (!options.force && access.grant.expiresAt - Date.now() > 120_000) return { token: access.grant.accessToken, accountId: access.accountId }
     let grant: CloudflareGrant
     try { grant = await refresh(access.grant) }
-    catch { fail(409, 'cloudflare_access_expired', 'Cloudflare access on this Server expired. Reconnect Cloudflare.') }
+    catch (error) {
+      // Only a Cloudflare refusal says the grant itself is dead; anything else may pass on a retry.
+      if (error instanceof CloudflareGrantError && error.failure === 'denied') {
+        await markRefused(env)
+        fail(409, 'cloudflare_access_expired', 'Cloudflare access on this Server expired. Reconnect Cloudflare.')
+      }
+      fail(502, 'cloudflare_unavailable', 'Cloudflare could not be reached. Try again.')
+    }
+    await clearRefused(env)
     if (await store(env, { ...access, grant }, stored.value)) return { token: grant.accessToken, accountId: access.accountId }
     // Another request refreshed first; use its newer grant.
   }

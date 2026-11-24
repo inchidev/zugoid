@@ -36,12 +36,21 @@ export const CLOUDFLARE_SCOPES = [
 export const cloudflareGrantSchema = z.object({ accessToken: z.string().min(1), refreshToken: z.string().min(1), expiresAt: z.number(), clientId: z.string().min(1) })
 export type CloudflareGrant = z.infer<typeof cloudflareGrantSchema>
 
+/** 'denied' means Cloudflare refused the grant itself and it needs reconnecting; anything else may work on retry. */
+export class CloudflareGrantError extends Error {
+  constructor(readonly failure: 'denied' | 'unreachable', message: string) { super(message) }
+}
+
 export async function oauthGrant(body: URLSearchParams, clientId: string, fallbackRefreshToken = ''): Promise<CloudflareGrant> {
   body.set('client_id', clientId)
   const response = await fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: AbortSignal.timeout(20000) })
-  if (!response.ok) throw new Error('Cloudflare authorization expired. Reconnect Cloudflare.')
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: string } | null
+    if (response.status === 400 && detail?.error) throw new CloudflareGrantError('denied', 'Cloudflare authorization expired. Reconnect Cloudflare.')
+    throw new CloudflareGrantError('unreachable', 'Cloudflare could not be reached. Try again.')
+  }
   const token = z.object({ access_token: z.string(), refresh_token: z.string().optional(), expires_in: z.number().positive() }).parse(await response.json())
-  if (!token.refresh_token && !fallbackRefreshToken) throw new Error('Cloudflare did not grant offline access. Reconnect Cloudflare.')
+  if (!token.refresh_token && !fallbackRefreshToken) throw new CloudflareGrantError('denied', 'Cloudflare did not grant offline access. Reconnect Cloudflare.')
   return { accessToken: token.access_token, refreshToken: token.refresh_token || fallbackRefreshToken, expiresAt: Date.now() + token.expires_in * 1000, clientId }
 }
 

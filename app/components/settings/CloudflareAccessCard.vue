@@ -2,11 +2,12 @@
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { formatDateTime } from '~~/shared/format'
 
-type AccessState = { available: boolean; accountId: string | null; access: { connected: false } | { connected: true; kind: 'oauth' | 'token'; accountId: string; connectedAt: string } }
+type AccessState = { available: boolean; accountId: string | null; access: { connected: false } | { connected: true; kind: 'oauth' | 'token'; accountId: string; connectedAt: string; refusedAt?: string } }
 const props = defineProps<{ serverId: string }>()
 const { api } = useApi()
 const qc = useQueryClient(), toast = useToast()
 const access = useQuery({ queryKey: computed(() => ['cloudflare-account', props.serverId]), queryFn: () => api<AccessState>(`/api/servers/${props.serverId}/cloudflare-account`) })
+const refused = computed(() => access.data.value?.access.connected === true ? access.data.value.access.refusedAt : undefined)
 const pasting = ref(false), token = ref(''), busy = ref(false)
 // Cloudflare pre-fills an account token with exactly what an update needs.
 const tokenUrl = computed(() => {
@@ -39,10 +40,11 @@ defineExpose({ connected: computed(() => access.data.value?.access.connected ===
   <section v-if="access.data.value?.available" class="space-y-2 rounded-lg border border-default p-4" aria-label="Cloudflare access">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex min-w-0 items-center gap-2"><UIcon name="i-ph-cloud" class="size-4 shrink-0" /><h2 class="text-sm font-medium text-highlighted">Cloudflare access</h2></div>
-      <UBadge :label="access.data.value.access.connected ? 'Connected' : 'Not connected'" :color="access.data.value.access.connected ? 'success' : 'neutral'" variant="subtle" size="sm" />
+      <UBadge v-if="refused" label="Needs reconnect" color="warning" variant="subtle" size="sm" />
+      <UBadge v-else :label="access.data.value.access.connected ? 'Connected' : 'Not connected'" :color="access.data.value.access.connected ? 'success' : 'neutral'" variant="subtle" size="sm" />
     </div>
     <div v-if="access.data.value.access.connected" class="flex flex-wrap items-center justify-between gap-2">
-      <p class="text-sm text-muted">{{ access.data.value.access.kind === 'oauth' ? 'Kept from the official installer' : 'API token' }} · since {{ formatDateTime(access.data.value.access.connectedAt) }}. Used for updates, domains, mail and Live.</p>
+      <p class="text-sm text-muted">{{ access.data.value.access.kind === 'oauth' ? 'Kept from the official installer' : 'API token' }}{{ refused ? ` · refused by Cloudflare on ${formatDateTime(refused)}. Disconnect it and connect a new one` : ` · since ${formatDateTime(access.data.value.access.connectedAt)}` }}. Used for updates, domains, mail and Live.</p>
       <UButton label="Disconnect" size="sm" color="neutral" variant="ghost" :loading="busy" @click="disconnect" />
     </div>
     <template v-else>
