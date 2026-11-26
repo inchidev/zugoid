@@ -29,6 +29,7 @@ describe('Server theme', () => {
 
   it('hides sidebar sections other than Chat, each once', () => {
     expect(serverThemeSchema.parse({ hiddenSections: ['customers', 'factory', 'customers'] }).hiddenSections).toEqual(['customers', 'factory'])
+    expect(serverThemeSchema.parse({ hiddenSections: ['schedules'] }).hiddenSections).toEqual(['schedules'])
     expect(serverThemeSchema.safeParse({ hiddenSections: ['chat'] }).success).toBe(false)
     expect(serverThemeSchema.safeParse({ hiddenSections: ['gadgets'] }).success).toBe(false)
     expect(isDefaultTheme(serverThemeSchema.parse({ hiddenSections: ['customers'] }))).toBe(false)

@@ -8,7 +8,7 @@ A Schedule triggers a reminder or Agent work at a time you choose, once, daily o
 
 ## Who can use Schedules
 
-Schedules need **Manage schedules** in your Role. No Role has it by default, not even Admin. When you have it, **Schedules** appears at the top of the **Agents** section of the rail.
+Schedules need **Manage schedules** in your Role. With this permission and the **Scheduled** module enabled, **Scheduled** appears next to **Inbox** in the rail. The Server Owner can switch Scheduled on or off in **Server settings → Modules**.
 
 Recurring Agent work additionally needs **Execute assigned tasks** and **Use agents** for you, and **Execute assigned tasks** for the Agent. Repository work also needs **Use a computer** for both.
 
@@ -19,7 +19,7 @@ Recurring Agent work additionally needs **Execute assigned tasks** and **Use age
 
 ## Create a Schedule
 
-1. Open **Agents** in the rail and select **Schedules**.
+1. Open **Scheduled** in the rail.
 2. In **What should happen?**, write the reminder text or the instruction for the Agent.
 3. Choose the **Action**: **Reminder** or **Run an assigned task**.
 4. Choose the **Conversation**. For a task, also choose the **Assigned task**.

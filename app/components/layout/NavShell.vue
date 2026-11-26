@@ -78,16 +78,19 @@ const showsTasks = computed(() => canAnyProject(Permission.readTasks))
 const showsFactory = computed(() => canAnyProject(Permission.readProjects))
 const views = computed(() => [
   { label: 'Inbox', icon: 'i-ph-tray', to: '/inbox', path: '/inbox', count: attention.value, dot: false },
+  ...(can(Permission.manageSchedules) ? [{ label: 'Scheduled', icon: 'i-ph-clock', to: '/schedules', path: '/schedules', count: 0, dot: false }] : []),
   { label: 'Chat', icon: 'i-ph-chat-circle', to: chatTarget.value, path: '/channels', count: 0, dot: chatUnread.value },
   ...(showsTasks.value ? [{ label: 'Tasks', icon: 'i-ph-kanban', to: BOARD_ROUTE, path: BOARD_ROUTE, count: 0, dot: false }] : []),
   ...(showsFactory.value ? [{ label: 'Factory', icon: 'i-ph-git-branch', to: '/projects', path: '/projects', count: 0, dot: false }] : []),
   { label: 'Customers', icon: 'i-ph-address-book', to: customersTarget.value, path: '/customers', count: 0, dot: mailUnread.value },
-  // A Schedule lives in Agents, so its own permission opens the section for someone with no Agents.
-  ...(can(Permission.useAgents) || can(Permission.manageAgents) || can(Permission.manageSchedules) ? [{ label: 'Agents', icon: 'i-ph-robot', to: can(Permission.useAgents) || can(Permission.manageAgents) ? '/agents' : '/schedules', path: '/agents', count: 0, dot: false }] : []),
+  ...(can(Permission.useAgents) || can(Permission.manageAgents) ? [{ label: 'Agents', icon: 'i-ph-robot', to: '/agents', path: '/agents', count: 0, dot: false }] : []),
   ...(can(Permission.readData) ? [{ label: 'Data', icon: 'i-ph-stack', to: '/data', path: '/data', count: 0, dot: false }] : []),
   { label: 'Media', icon: 'i-ph-images', to: '/media', path: '/media', count: 0, dot: false },
   ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
-].filter(view => !pausedSections.has(serverNavigationSection(view.path)!) && !hiddenSections.value.has(serverNavigationSection(view.path)!)))
+].filter((view) => {
+  const section = serverNavigationSection(view.path)!
+  return !pausedSections.has(section) && !hiddenSections.value.has(section)
+}))
 function isViewActive(path: string) {
   return section.value === serverNavigationSection(path)
 }

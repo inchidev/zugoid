@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatNavigationTarget, hasServerNavigationMenu, serverNavigationSection } from '../../shared/server-navigation'
+import { apiModuleSection, chatNavigationTarget, hasServerNavigationMenu, serverNavigationSection } from '../../shared/server-navigation'
 
 describe('Server rail destinations', () => {
   it('keeps channels, DMs and threads in Chat', () => {
@@ -47,9 +47,12 @@ describe('Server rail destinations', () => {
     for (const path of ['/factory', '/factory/projects/project-id']) expect(serverNavigationSection(path)).toBe('factory')
   })
 
-  it('puts Schedules in Agents', () => {
-    expect(serverNavigationSection('/schedules')).toBe('agents')
-    expect(hasServerNavigationMenu('/schedules')).toBe(true)
+  it('opens Scheduled directly and assigns its page and API to its own module', () => {
+    expect(serverNavigationSection('/schedules')).toBe('schedules')
+    expect(hasServerNavigationMenu('/schedules')).toBe(false)
+    expect(apiModuleSection('/api/schedules')).toBe('schedules')
+    expect(apiModuleSection('/api/schedules/id/occurrences')).toBe('schedules')
+    expect(apiModuleSection('/api/agents')).toBe('agents')
   })
 
   it('leaves settings with only the compact rail', () => {

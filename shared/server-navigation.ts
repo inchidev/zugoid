@@ -1,6 +1,6 @@
 import { channelPath, type ChannelRef } from './paths'
 
-export type ServerNavigationSection = 'chat' | 'inbox' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'gadgets'
+export type ServerNavigationSection = 'chat' | 'inbox' | 'schedules' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'gadgets'
 
 /** The Chat rail must not reopen an Agent DM remembered by an older Client. */
 export function chatNavigationTarget(conversations: readonly ChannelRef[], lastId?: string): string {
@@ -11,7 +11,7 @@ export function chatNavigationTarget(conversations: readonly ChannelRef[], lastI
 
 /**
  * Resource routes retain their section. Tasks holds boards and Tasks, and Factory holds coding work:
- * Projects with repositories, and Runs. A Schedule reminds or runs an Agent, so it sits in Agents.
+ * Projects with repositories, and Runs.
  */
 export function serverNavigationSection(path: string): ServerNavigationSection | null {
   const segment = path.split('/')[1]
@@ -19,26 +19,27 @@ export function serverNavigationSection(path: string): ServerNavigationSection |
   const next = path.split('/')[2]
   if (segment === 'tasks' || (segment === 'projects' && ['board', 'my-tasks', 'mark'].includes(next || ''))) return 'tasks'
   if (segment === 'projects' || segment === 'factory' || segment === 'runs') return 'factory'
-  if (segment === 'schedules') return 'agents'
   if (['data', 'databases', 'items'].includes(segment || '')) return 'data'
   // Mailboxes are a view of Customers.
   if (segment === 'customers' || segment === 'mail') return 'customers'
-  if (segment === 'inbox' || segment === 'agents' || segment === 'media' || segment === 'gadgets') return segment
+  if (segment === 'inbox' || segment === 'schedules' || segment === 'agents' || segment === 'media' || segment === 'gadgets') return segment
   return null
 }
 
 export function hasServerNavigationMenu(path: string): boolean {
-  return serverNavigationSection(path) !== null
+  const section = serverNavigationSection(path)
+  return section !== null && section !== 'schedules'
 }
 
 /** The API paths of each section, for the Server's module switches: a section left out answers 404. */
 const API_MODULE_SEGMENTS: Record<string, ServerNavigationSection> = {
   inbox: 'inbox',
+  schedules: 'schedules',
   tasks: 'tasks', 'task-attachments': 'tasks', 'task-checklist': 'tasks', 'task-files': 'tasks', boards: 'tasks',
   projects: 'factory', runs: 'factory', factory: 'factory', 'code-environments': 'factory', 'git-connections': 'factory',
   'compute-nodes': 'factory', 'compute-agent': 'factory',
   customers: 'customers', mail: 'customers',
-  agents: 'agents', 'agent-runs': 'agents', schedules: 'agents', 'agent-auth': 'agents',
+  agents: 'agents', 'agent-runs': 'agents', 'agent-auth': 'agents',
   media: 'media',
   databases: 'data', 'database-fields': 'data', 'database-views': 'data', items: 'data',
   gadgets: 'gadgets',
