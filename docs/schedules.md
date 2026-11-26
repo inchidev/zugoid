@@ -78,9 +78,9 @@ A Schedule's `lastError` and `lastErrorCode` hold the latest failure. `unavailab
 
 ## Agent tools
 
-Within a Run in a conversation, an Agent with `manageSchedules` (subject to tool review) can use:
+Within an interactive Run, an Agent can use `prepare_work_schedule` `{ content, firstAt, timezone, recurrence, taskId? }` when the initiating Member has `manageSchedules`. It prepares work for the same Agent and conversation. The Member reviews and confirms the completed proposal from the Run. The approval endpoint rechecks permissions and uses the proposal ID to deduplicate confirmation. Work on an assigned Task also needs Task execution grants.
 
-- `prepare_work_schedule` `{ content, firstAt, timezone, recurrence, taskId? }`: prepares work for the same Agent and conversation. The initiating Member reviews and confirms the completed proposal from the Run. The approval endpoint rechecks the current permissions and uses the proposal ID to deduplicate confirmation. Repository work uses its assigned Task.
+An Agent with `manageSchedules` (subject to tool review) can use:
 
 - `create_reminder` `{ content, firstAt, timezone, recurrence }`: a reminder in the Run's conversation. Confirm ambiguous times with the person first; `get_current_time` gives the Server time and timezone.
 - `update_reminder` `{ scheduleId, content?, firstAt?, timezone?, recurrence? }`: edit a reminder the Agent created in the Run's conversation, under the same rules as an edit.
