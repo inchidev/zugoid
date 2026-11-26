@@ -1,6 +1,6 @@
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/client/validators/cf-worker'
-import { CUSTOM_MCP_PROVIDER, mcpCredentialHeaders, mcpEndpointProblem, outboundMcpProviders, type McpToolSnapshot } from '../../shared/outbound-mcp'
+import { CUSTOM_MCP_PROVIDER, mcpCredentialHeaders, mcpEndpointProblem, outboundMcpProviders, reviewedMcpTools, UNOT_DRAFT_PROVIDER, unotDraftWrites, type McpToolSnapshot } from '../../shared/outbound-mcp'
 import { fail } from './cf'
 
 const baseValidator = new CfWorkerJsonSchemaValidator()
@@ -85,9 +85,9 @@ export async function withMcpClient<T>(target: string | McpTarget, auth: McpAuth
   const custom = providerId === CUSTOM_MCP_PROVIDER
   const endpoint = custom ? saved : outboundMcpProviders.find(provider => provider.id === providerId)?.endpoint
   if (!endpoint) fail(409, 'mcp_unavailable', 'MCP provider is no longer available')
-  const bounded = AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])])
+  const bounded = AbortSignal.any([AbortSignal.timeout(providerId === UNOT_DRAFT_PROVIDER ? 50000 : 15000), ...(signal ? [signal] : [])])
   // Each operation owns its client/session/request IDs. No shared transport across users or connections.
-  const client = new Client({ name: 'Zugoid read-only tool broker', version: '1' }, { capabilities: {}, jsonSchemaValidator: mcpValidator })
+  const client = new Client({ name: 'Zugoid tool broker', version: '1' }, { capabilities: {}, jsonSchemaValidator: mcpValidator })
   let credentialsRejected = false
   const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
     fetch: mcpBoundedFetch(endpoint, auth, bounded, () => { credentialsRejected = true }, custom), requestInit: { redirect: 'manual', signal: bounded },
@@ -103,8 +103,10 @@ export async function withMcpClient<T>(target: string | McpTarget, auth: McpAuth
 }
 
 type RemoteTool = Awaited<ReturnType<Client['listTools']>>['tools'][number]
-async function snapshot(remote: RemoteTool, connectionId: string, custom: boolean): Promise<McpToolSnapshot> {
-  const parameters = safeMcpSchema(remote.inputSchema)
+async function snapshot(remote: RemoteTool, connectionId: string, custom: boolean, unot = false): Promise<McpToolSnapshot> {
+  // Unot validates its identifiers on receipt. The local generic validator never evaluates a remote regex.
+  const schema = unot ? JSON.parse(JSON.stringify(remote.inputSchema), (key, value) => key === 'pattern' ? undefined : value) : remote.inputSchema
+  const parameters = safeMcpSchema(schema)
   const description = String(remote.description ?? remote.name).slice(0, 700)
   const outputSchema = remote.outputSchema ? safeMcpSchema(remote.outputSchema) : null
   const declaredReadOnly = remote.annotations?.readOnlyHint === true
@@ -149,12 +151,15 @@ export async function readMcpTools(client: Client, connectionId: string, provide
     return Promise.all(listed.map(remote => snapshot(remote, connectionId, true)))
   }
   const provider = outboundMcpProviders.find(provider => provider.id === providerId)!
+  const unot = providerId === UNOT_DRAFT_PROVIDER
   const listed = await client.listTools({}, { timeout: 10000 })
   if (listed.nextCursor || listed.tools.length > 40 || new Set(listed.tools.map(tool => tool.name)).size !== listed.tools.length) fail(422, 'mcp_catalog_large', 'MCP tool list is too large or ambiguous')
   const result: McpToolSnapshot[] = []
   for (const remote of listed.tools) {
-    if (!names.includes(remote.name) || !(provider.readTools as readonly string[]).includes(remote.name) || remote.annotations?.readOnlyHint === false) continue
-    result.push(await snapshot(remote, connectionId, false))
+    if (!names.includes(remote.name) || !reviewedMcpTools(provider).includes(remote.name)) continue
+    const reviewedWrite = unot && unotDraftWrites.includes(remote.name)
+    if (remote.annotations?.destructiveHint === true || (!reviewedWrite && remote.annotations?.readOnlyHint === false)) continue
+    result.push(await snapshot(remote, connectionId, false, unot))
   }
   if (!result.length) fail(409, 'mcp_no_read_tools', 'MCP exposes none of the explicitly permitted read-only tools')
   return result

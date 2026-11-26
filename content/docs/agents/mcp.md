@@ -126,7 +126,11 @@ The full reference is in [docs/mcp.md](https://github.com/inchidev/zugoid/blob/m
 
 ## External tools for Agents
 
-The other direction, Agents on your Server calling outside MCP servers, is set up in **Server settings → Tools**. There are two kinds of source, both read-only: reviewed public documentation (Cloudflare documentation and DeepWiki), and, for the Server Owner, your own HTTPS MCP server such as Coolify or DBHub. Local commands, external writes and automatic OAuth are not available.
+Agents on your Server can call outside MCP servers from **Server settings → Tools**. Public documentation sources and Owner-configured HTTPS endpoints offer read-only tools. Unot development studios can also connect a personal Unot draft account.
+
+### Connect Unot development drafts
+
+In a hosted Unot development studio, select **Unot dev game drafts** in **Tools**. Enter the bearer access token and its expiry from the author's Unot dev MCP connection. Choose an Agent and allow the tools it needs. The author starts the Run with that connection and names the draft. The Agent can open it, save against the current version, play that exact new version, and return its private preview link. Turn on **Use external tools** for the Agent's Role and the Run initiator.
 
 ### Connect your own MCP server
 
