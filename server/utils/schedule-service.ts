@@ -292,7 +292,7 @@ export async function updateSchedule(env: ZugoidEnv, auth: AuthorizationContext,
     fail(409, 'schedule_due', 'This schedule is delivering or retrying its current occurrence. Pause it first, or try again once it finishes.')
   const input = scheduleRequestSchema.parse({ channelId: item.channelId, kind: item.kind, content: changes.content ?? item.content,
     firstAt: changes.firstAt ?? (retimed ? item.nextAt ?? item.firstAt : item.firstAt), timezone: changes.timezone ?? item.timezone, recurrence: changes.recurrence ?? item.recurrence,
-    ...(item.kind === 'work' ? { agentId: changes.agentId ?? item.agentId, taskId: changes.taskId ?? item.taskId } : {}) })
+    ...(item.kind === 'work' ? { agentId: changes.agentId ?? item.agentId, taskId: changes.taskId ?? item.taskId ?? undefined } : {}) })
   if (retimed) requireScheduleTime(input.firstAt)
   const mandate = await authorizeSchedule(env, auth, input)
   const authorizationJson = JSON.stringify(auth)
