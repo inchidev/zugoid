@@ -107,13 +107,14 @@ async function authorizeSchedule(env: ZugoidEnv, auth: AuthorizationContext, inp
   let mandate: RunMandate | null = null
   if (input.kind === 'work') {
     if (conversation.mailPermission || conversation.channel.type === 'conversation' || conversation.channel.section !== 'chat') fail(400, 'schedule_conversation', 'Choose a chat channel or direct message')
-    requireGrant(auth, Permission.executeTasks)
+    if (input.taskId) requireGrant(auth, Permission.executeTasks)
     requireGrant(auth, Permission.useAgents)
     if (auth.principal.kind === 'agent' && input.agentId !== auth.principal.id) fail(403, 'schedule_denied', 'An agent may schedule only its own work')
     await requireRunnableAgent(env, input.agentId!, input.channelId)
     const agent = await loadAuthorizationContext(env, { principalId: input.agentId!, credential: { kind: 'agent_runtime' },
       delegatedBy: auth.delegation?.by ?? auth.principal.id })
-    if (!agent || agent.principal.kind !== 'agent' || !hasPermission(agent.principal.permissions, Permission.executeTasks)) fail(403, 'schedule_denied', 'Agent task execution is not granted')
+    if (!agent || agent.principal.kind !== 'agent') fail(403, 'schedule_denied', 'Agent execution is not granted')
+    if (input.taskId && !hasPermission(agent.principal.permissions, Permission.executeTasks)) fail(403, 'schedule_denied', 'Agent task execution is not granted')
     await scheduleMember(env, agent, input.channelId)
     const task = input.taskId ? await getTask(env, agent, input.taskId) : null
     if (input.taskId && (!task || task.assigneeId !== input.agentId)) fail(403, 'schedule_denied', 'Task must be assigned to the selected agent')

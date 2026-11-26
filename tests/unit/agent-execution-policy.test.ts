@@ -14,7 +14,9 @@ beforeEach(() => {
   f.db.prepare('INSERT INTO task_boards(id,name,created_by) VALUES(?,?,?)').run('test-board', 'Work', ids.owner)
 })
 afterEach(() => f.db.close())
-it('prepares work from a chat Run without starting a schedule before confirmation', async () => {
+it('lets a chat Agent draft a schedule for an authorized Member without granting the Agent schedule management', async () => {
+  f.db.prepare('UPDATE roles SET permissions_bitmask=? WHERE id=?')
+    .run(ALL_PERMISSIONS & ~Permission.manageSchedules & ~Permission.executeTasks, ids.agentRole)
   const { run } = await f.run()
   f.env.AGENT_SCHEDULE_DO = {} as typeof f.env.AGENT_SCHEDULE_DO
   f.db.prepare("INSERT INTO messages(id,channel_id,author_id,content,created_at) VALUES('schedule-message','public-chat',?,'Sync the lists each week',?)").run(ids.owner, new Date().toISOString())
@@ -27,6 +29,11 @@ it('prepares work from a chat Run without starting a schedule before confirmatio
   expect(await scheduleProposals(f.env, run)).toEqual([])
   expect(await scheduleProposals(f.env, { ...run, status: 'completed' })).toEqual([{ ...(proposed as object), confirmed: false }])
   expect(f.db.prepare('SELECT count(*) AS n FROM agent_schedules').get()!.n).toBe(0)
+
+  const member = await f.run(ids.member)
+  const memberRun = { ...member.run, sourceMessageId: 'schedule-message' }
+  const tools = await toolsForRun(f.env, member.authorization, () => {}, memberRun)
+  expect(tools.descriptors.some(tool => tool.name === call.name)).toBe(false)
 })
 it('admits generous role-authorized limits and exposes permitted writes after reading untrusted content', async () => {
   const { run, authorization } = await f.run()
