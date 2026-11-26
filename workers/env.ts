@@ -140,6 +140,8 @@ export type ZugoidEnv = {
    * person in as one of the partner's people, and that remove one. Unset everywhere else.
    */
   PARTNER_SIGNIN_KEY?: string
+  /** Display name of this Server’s sign-in partner. */
+  PARTNER_DISPLAY_NAME?: string
   /** The Host a proxy rewrites this Server's requests to, for a runtime that picks the Worker by Host: served as PUBLIC_ORIGIN. */
   ZUGOID_INTERNAL_HOST?: string
   ADMIN_PASSWORD?: string

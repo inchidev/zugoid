@@ -27,6 +27,7 @@ const revealEmail = ref(false)
 const confirmLogout = ref(false)
 const savingName = ref(false)
 const accountProviders = ref<string[]>([])
+const partnerName = ref('')
 const hasPassword = computed(() => accountProviders.value.includes('credential'))
 
 const schema = z.object({ displayName: z.string().min(1).max(80) })
@@ -69,10 +70,13 @@ watch(open, async (v) => {
     password.confirm = ''
     revealEmail.value = false
     try {
-      accountProviders.value = (await api<{ providers: string[] }>('/api/auth/accounts')).providers
+      const accounts = await api<{ providers: string[], partnerName?: string }>('/api/auth/accounts')
+      accountProviders.value = accounts.providers
+      partnerName.value = accounts.partnerName ?? ''
     }
     catch {
       accountProviders.value = []
+      partnerName.value = ''
     }
     await push.refresh()
   }
@@ -327,6 +331,10 @@ const showServers = import.meta.client ? window.__ZUGOID_NATIVE_SHOW_SERVERS__ :
               </div>
               <UButton size="xs" color="neutral" variant="soft" label="Edit" @click="section = 'profile'" />
             </div>
+            <template v-if="partnerName">
+              <USeparator />
+              <p class="text-sm text-muted">Signed in through {{ partnerName }}</p>
+            </template>
             <USeparator v-if="email" />
             <div v-if="email" class="flex items-center justify-between gap-3">
               <div class="min-w-0">
