@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "efe22e46-54cb-4ee5-a556-d0b5f213b205",
+  "id": "b140bb62-daa9-4327-934a-c10410cec094",
   "prevId": "4db1c612-3c03-4906-aae7-5c3e0c194edc",
   "tables": {
     "account_recovery": {

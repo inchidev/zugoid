@@ -151,7 +151,8 @@ export async function createSchedule(env: ZugoidEnv, auth: AuthorizationContext,
     .bind(id, auth.principal.id, owner(auth), input.channelId, input.kind, input.content, input.agentId ?? null, input.taskId ?? null,
       new Date(input.firstAt).toISOString(), input.timezone, input.recurrence, new Date(input.firstAt).toISOString(), JSON.stringify(auth), mandate ? JSON.stringify(mandate) : null,
       nowIso(), owner(auth), SCHEDULE_ACTIVE_LIMIT)
-  const discussionId = input.kind === 'work' ? newId() : null
+  // Reusing the schedule ID lets the channel trigger validate its parent during the same batch.
+  const discussionId = input.kind === 'work' ? id : null
   const [created] = await env.DB.batch([
     insert,
     ...discussionId ? [
