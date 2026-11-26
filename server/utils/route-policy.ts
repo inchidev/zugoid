@@ -39,6 +39,7 @@ export const ROUTE_POLICIES: Readonly<Record<string, RoutePolicy>> = {
   'agent-runs/[id]/gateway/[...path]': unscoped('run.gateway.any'),
   'agent-runs/[id]/publication.post': inSpace('run', 'id', 'run.create'),
   'agent-runs/[id]/retry.post': inSpace('run', 'id', 'run.start'),
+  'agent-runs/[id]/schedule.post': inSpace('run', 'id', 'schedule.create'),
   'agent-runs/[id]/steer.post': inSpace('run', 'id', 'run.create'),
   'agent-runs/[id]/transcript.get': inSpace('run', 'id', 'run.read'),
   'agent-runs/index.get': inActiveSpace('run.read'),

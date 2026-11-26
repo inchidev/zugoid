@@ -115,18 +115,18 @@ async function authorizeSchedule(env: ZugoidEnv, auth: AuthorizationContext, inp
       delegatedBy: auth.delegation?.by ?? auth.principal.id })
     if (!agent || agent.principal.kind !== 'agent' || !hasPermission(agent.principal.permissions, Permission.executeTasks)) fail(403, 'schedule_denied', 'Agent task execution is not granted')
     await scheduleMember(env, agent, input.channelId)
-    const task = await getTask(env, agent, input.taskId!)
-    if (!task || task.assigneeId !== input.agentId) fail(403, 'schedule_denied', 'Task must be assigned to the selected agent')
-    if (task.archivedAt || task.status === 'done') fail(409, 'task_closed', 'Choose an open task')
+    const task = input.taskId ? await getTask(env, agent, input.taskId) : null
+    if (input.taskId && (!task || task.assigneeId !== input.agentId)) fail(403, 'schedule_denied', 'Task must be assigned to the selected agent')
+    if (task && (task.archivedAt || task.status === 'done')) fail(409, 'task_closed', 'Choose an open task')
     // A person's scheduled work keeps any Agent access they hold for this Agent, as their direct Runs do.
     const humanPermissions = auth.delegation ? (auth.delegation.isOwner ? auth.principal.permissions : auth.delegation.permissions!)
       : agent.delegation && !agent.delegation.isOwner ? agent.delegation.permissions! : auth.principal.permissions
     mandate = { execution: await agentExecutionPolicy(env), permissions: humanPermissions, resourceAccess: auth.delegation?.resourceAccess ?? auth.principal.resourceAccess,
       agentPermissions: agent.principal.permissions & (auth.principal.kind === 'agent' ? auth.principal.permissions : agent.principal.permissions),
       agentResourceAccess: auth.principal.kind === 'agent' ? intersectResources(agent.principal.resourceAccess, auth.principal.resourceAccess) : agent.principal.resourceAccess,
-      computer: hasPermission(agent.principal.permissions, Permission.useComputer) && hasPermission(humanPermissions, Permission.useComputer),
+      computer: Boolean(task) && hasPermission(agent.principal.permissions, Permission.useComputer) && hasPermission(humanPermissions, Permission.useComputer),
       maxSteps: 20, maxModelCalls: 20, maxToolCalls: 100, maxTokens: 64000 }
-    if (task.environmentId) {
+    if (task?.environmentId) {
       if (!mandate.computer) fail(403, 'code_denied', 'Scheduled repository work requires computer permission')
       const environment = await findCodeEnvironment(env, task.environmentId)
       if (!environment?.enabled) fail(403, 'code_denied', 'Repository environment is unavailable')
@@ -139,15 +139,23 @@ async function authorizeSchedule(env: ZugoidEnv, auth: AuthorizationContext, inp
   return mandate
 }
 
-export async function createSchedule(env: ZugoidEnv, auth: AuthorizationContext, request: ScheduleRequest) {
+export async function createSchedule(env: ZugoidEnv, auth: AuthorizationContext, request: ScheduleRequest, proposalId?: string) {
   requireGrant(auth, Permission.manageSchedules)
   if (!env.AGENT_SCHEDULE_DO) fail(409, 'schedule_unavailable', 'Schedule execution is not configured')
   const input = scheduleRequestSchema.parse(request)
+  if (proposalId) {
+    const existing = await findSchedule(env, proposalId)
+    if (existing && existing.createdBy === owner(auth)) {
+      await wake(env, existing.id)
+      return publicSchedule(existing)
+    }
+  }
   requireScheduleTime(input.firstAt)
   const mandate = await authorizeSchedule(env, auth, input)
-  const id = newId()
+  const id = proposalId ?? newId()
   const insert = env.DB.prepare(`INSERT INTO agent_schedules(id,principal_id,created_by,channel_id,kind,content,agent_id,task_id,first_at,timezone,recurrence,next_at,status,authorization_json,mandate_json,created_at)
-    SELECT ?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,? WHERE (SELECT count(*) FROM agent_schedules WHERE created_by=? AND status='active')<? RETURNING id`)
+    SELECT ?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,? WHERE (SELECT count(*) FROM agent_schedules WHERE created_by=? AND status='active')<?
+    ON CONFLICT(id) DO NOTHING RETURNING id`)
     .bind(id, auth.principal.id, owner(auth), input.channelId, input.kind, input.content, input.agentId ?? null, input.taskId ?? null,
       new Date(input.firstAt).toISOString(), input.timezone, input.recurrence, new Date(input.firstAt).toISOString(), JSON.stringify(auth), mandate ? JSON.stringify(mandate) : null,
       nowIso(), owner(auth), SCHEDULE_ACTIVE_LIMIT)
@@ -159,13 +167,14 @@ export async function createSchedule(env: ZugoidEnv, auth: AuthorizationContext,
       env.DB.prepare(`INSERT INTO channels(id,space_id,name,type,section,visibility,parent_id,created_by)
         SELECT ?,source.space_id,'Scheduled work','conversation',root.section,root.visibility,root.id,s.created_by
         FROM agent_schedules s JOIN channels source ON source.id=s.channel_id
-        JOIN channels root ON root.id=COALESCE(source.parent_id,source.id) WHERE s.id=?`).bind(discussionId, id),
-      env.DB.prepare('UPDATE agent_schedules SET discussion_channel_id=? WHERE id=?').bind(discussionId, id),
+        JOIN channels root ON root.id=COALESCE(source.parent_id,source.id) WHERE s.id=? AND s.discussion_channel_id IS NULL`).bind(discussionId, id),
+      env.DB.prepare('UPDATE agent_schedules SET discussion_channel_id=? WHERE id=? AND discussion_channel_id IS NULL').bind(discussionId, id),
     ] : [],
   ])
-  if (!created?.results?.length) fail(429, 'schedule_limit', `You already have ${SCHEDULE_ACTIVE_LIMIT} active schedules. Cancel one first.`)
+  const saved = await findSchedule(env, id)
+  if (!created?.results?.length && (!proposalId || saved?.createdBy !== owner(auth))) fail(429, 'schedule_limit', `You already have ${SCHEDULE_ACTIVE_LIMIT} active schedules. Cancel one first.`)
   await wake(env, id)
-  return publicSchedule((await findSchedule(env, id))!)
+  return publicSchedule(saved!)
 }
 export function publicSchedule(item: Schedule): PublicSchedule {
   const { authorizationJson: _authorization, mandateJson: _mandate, ...publicItem } = item
@@ -242,7 +251,7 @@ export async function resumeSchedule(env: ZugoidEnv, auth: AuthorizationContext,
   await scheduleAuthorization(env, item)
   if (item.kind === 'work') {
     await requireRunnableAgent(env, item.agentId!, item.channelId)
-    await requireOpenTask(env, item.taskId!, item.agentId!)
+    if (item.taskId) await requireOpenTask(env, item.taskId, item.agentId!)
   }
   const due = item.nextAt ?? item.firstAt
   const nextAt = Date.parse(due) > Date.now() || item.recurrence === 'once' ? due : nextScheduleAt(item, due, nowIso())
@@ -374,7 +383,7 @@ export async function recordScheduleFailure(env: ZugoidEnv, item: Schedule, erro
 
 export async function executeScheduledOccurrence(env: ZugoidEnv, item: Schedule, schedule: (promise: Promise<unknown>) => void) {
   if (item.status !== 'active' || !item.nextAt || Date.parse(item.nextAt) > Date.now()) return
-  if (item.kind === 'work') await requireOpenTask(env, item.taskId!, item.agentId!)
+  if (item.kind === 'work' && item.taskId) await requireOpenTask(env, item.taskId, item.agentId!)
   const authorization = await scheduleAuthorization(env, item)
   await env.DB.prepare('INSERT INTO agent_schedule_occurrences(schedule_id,due_at,message_id) VALUES (?,?,?) ON CONFLICT DO NOTHING')
     .bind(item.id, item.nextAt, newId()).run()
@@ -390,7 +399,7 @@ export async function executeScheduledOccurrence(env: ZugoidEnv, item: Schedule,
       const human = authorization.principal.kind === 'human' ? authorization
         : await loadAuthorizationContext(env, { principalId: item.createdBy, credential: { kind: 'session' } })
       if (!human) fail(403, 'schedule_revoked', 'The schedule creator is no longer an active Member')
-      runId = (await createAgentRun(env, human, { agentId: item.agentId!, taskId: item.taskId!, channelId: item.discussionChannelId ?? item.channelId,
+      runId = (await createAgentRun(env, human, { agentId: item.agentId!, taskId: item.taskId ?? undefined, channelId: item.discussionChannelId ?? item.channelId,
         prompt: item.content, idempotencyKey: `schedule:${item.id}:${item.nextAt}` }, JSON.parse(item.mandateJson!) as RunMandate,
       item.discussionChannelId ? { scheduleId: item.id, channelId: item.channelId, messageId: occurrence!.messageId } : undefined)).id
     }

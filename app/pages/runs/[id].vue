@@ -8,6 +8,7 @@ import { Permission } from '~~/shared/permissions'
 import type { AgentRun } from '~~/shared/agent-execution'
 import { runStatusColor } from '~~/shared/agent-run-status'
 import { channelPath } from '~~/shared/paths'
+import type { ScheduleProposal } from '~~/shared/schedules'
 import { parseAgentModelRef } from '~~/shared/agent-providers'
 const nav = useNavActions()
 
@@ -43,7 +44,7 @@ async function downloadFiles() {
 }
 const runQ = useQuery({
   queryKey: computed(() => ['agent-run', route.params.id]),
-  queryFn: () => api<{ agentName?: string | null; task?: { id: string; number: number; title: string } | null; outward: { id: string; kind: string; status: string; sha: string | null; title: string | null; decidedAt: string | null; message: string | null; pullUrl: string | null; createdAt: string }[]; publicationHistory: { id: string; status: string; decidedAt: string | null; decidedBy: string | null }[]; publication: RunPublication | null; security: ToolSecurityStatus; delivery: RunDelivery | null; run: Omit<AgentRun, 'instructions' | 'mandateJson' | 'environmentJson' | 'filesKey'> & { hasFiles: boolean; hasFactory: boolean }; canCancel: boolean; canRetry: boolean; modelCalls: { callNumber: number; model: string; status: string; startedAt: string; completedAt: string | null; totalTokens: number | null; error: string | null }[]; events: { sequence: number; event: { type: string; text?: string; message?: string; name?: string; purpose?: string }; createdAt: string }[] }>(`/api/agent-runs/${route.params.id}`),
+  queryFn: () => api<{ proposedSchedules: ScheduleProposal[]; agentName?: string | null; task?: { id: string; number: number; title: string } | null; outward: { id: string; kind: string; status: string; sha: string | null; title: string | null; decidedAt: string | null; message: string | null; pullUrl: string | null; createdAt: string }[]; publicationHistory: { id: string; status: string; decidedAt: string | null; decidedBy: string | null }[]; publication: RunPublication | null; security: ToolSecurityStatus; delivery: RunDelivery | null; run: Omit<AgentRun, 'instructions' | 'mandateJson' | 'environmentJson' | 'filesKey'> & { hasFiles: boolean; hasFactory: boolean }; canCancel: boolean; canRetry: boolean; modelCalls: { callNumber: number; model: string; status: string; startedAt: string; completedAt: string | null; totalTokens: number | null; error: string | null }[]; events: { sequence: number; event: { type: string; text?: string; message?: string; name?: string; purpose?: string }; createdAt: string }[] }>(`/api/agent-runs/${route.params.id}`),
   refetchInterval: query => ['queued', 'running'].includes(query.state.data?.run.status ?? '') || query.state.data?.delivery?.reportStatus === 'pending' || query.state.data?.delivery?.taskStatus === 'pending' ? 2000 : false,
 })
 const run = computed(() => runQ.data.value?.run)
@@ -154,6 +155,13 @@ const outwardLabels: Record<string, string> = { publish: 'Push and pull request'
       </section>
       <section class="space-y-2"><h2 class="text-sm font-medium">Instruction</h2><p class="whitespace-pre-wrap text-sm text-muted">{{ displayAgentPrompt(run.prompt) }}</p></section>
       <section v-if="runQ.data.value?.modelCalls?.length" class="space-y-2"><h2 class="text-sm font-medium">Model requests</h2><ol class="space-y-2"><li v-for="call in runQ.data.value.modelCalls" :key="call.callNumber" class="rounded border border-default p-3 text-sm"><p class="break-all">#{{ call.callNumber }} · {{ call.model }} · {{ call.status }}</p><p class="text-xs text-muted">{{ new Date(call.startedAt).toLocaleString() }} · {{ call.totalTokens ?? 'reserved' }} tokens</p><p v-if="call.error" class="text-error">{{ call.error }}</p></li></ol></section>
+      <SchedulesProposal
+        v-for="proposal in runQ.data.value?.proposedSchedules ?? []"
+        :key="proposal.id"
+        :run-id="run.id"
+        :proposal="proposal"
+        :agent-name="runQ.data.value?.agentName ?? 'Agent'"
+      />
       <section v-if="run.resultText" class="space-y-2"><h2 class="text-sm font-medium">Result</h2><ChatMarkdownView :content="run.resultText" class="text-sm text-default" /></section>
       <section v-if="run.status === 'completed' && run.resultText?.trim() && can(Permission.approveAgentActions)" class="space-y-3 rounded-lg border border-default p-4">
         <h2 class="text-sm font-medium">Share result</h2>

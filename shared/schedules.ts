@@ -16,9 +16,21 @@ export const scheduleRequestSchema = z.object({
   agentId: z.string().min(8).optional(), taskId: z.string().min(8).optional(),
 }).superRefine((value, context) => {
   if (value.kind === 'reminder' && value.content.length > 1800) context.addIssue({ code: 'custom', message: 'A reminder can contain at most 1800 characters' })
-  if (value.kind === 'work' && (!value.agentId || !value.taskId)) context.addIssue({ code: 'custom', message: 'Recurring work needs an assigned agent and task' })
+  if (value.kind === 'work' && !value.agentId) context.addIssue({ code: 'custom', message: 'Recurring work needs an agent' })
 })
 export type ScheduleRequest = z.infer<typeof scheduleRequestSchema>
+export const scheduleProposalInputSchema = z.object({
+  content: z.string().trim().min(1).max(12000),
+  firstAt: z.string().datetime({ offset: true }),
+  timezone: z.string().min(1).max(100).refine(isTimeZone, 'Choose a valid IANA timezone'),
+  recurrence: z.enum(['once', 'daily', 'weekly']),
+  taskId: z.string().min(8).optional(),
+}).strict()
+export const scheduleProposalSchema = z.object({
+  id: z.uuid(),
+  input: scheduleRequestSchema,
+})
+export type ScheduleProposal = z.infer<typeof scheduleProposalSchema> & { confirmed: boolean }
 export const scheduleStatusFilters = ['current', 'history', 'active', 'paused', 'blocked', 'completed', 'cancelled'] as const
 export type ScheduleStatusFilter = typeof scheduleStatusFilters[number]
 export const scheduleListQuerySchema = z.object({
