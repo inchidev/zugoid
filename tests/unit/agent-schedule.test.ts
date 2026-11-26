@@ -162,6 +162,9 @@ it('confirms one schedule per proposal without requiring a Task', async () => {
   expect(first.discussionChannelId).toBeTruthy()
   expect(repeated.discussionChannelId).toBe(first.discussionChannelId)
   expect(db.prepare("SELECT count(*) AS count FROM channels WHERE type='conversation'").get()).toMatchObject({ count: 1 })
+  await expect(updateSchedule(env, member, first.id, { content: 'Updated instruction' })).resolves.toMatchObject({
+    content: 'Updated instruction', taskId: null, discussionChannelId: first.discussionChannelId,
+  })
 })
 
 describe('schedule failures', () => {
