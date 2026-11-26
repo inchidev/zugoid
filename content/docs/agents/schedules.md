@@ -67,6 +67,8 @@ Archiving a channel blocks Schedules that post there until the channel is restor
 
 ## Schedules created by Agents
 
+Ask an Agent in a channel or direct message to do something on a schedule. Open **Review proposed schedule** from its reply to check the instructions, Agent, time and destination. Select **Create schedule** to start it. For repository work, identify an open Task assigned to this Agent and linked to its repository. For work such as updating Data, the Agent can propose a schedule without a Task.
+
 During a Run in a conversation, an Agent with **Manage schedules** can create, edit, list and cancel reminders in that conversation for you. Agents check the current Server time first and should confirm ambiguous times with you. A reminder an Agent created is the Agent's to edit.
 
 ## API

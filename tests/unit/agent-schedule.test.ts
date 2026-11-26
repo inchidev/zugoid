@@ -146,6 +146,24 @@ it('keeps two occurrences in one chat and inherits the source audience', async (
   } finally { started.mockReset() }
 })
 
+it('confirms one schedule per proposal without requiring a Task', async () => {
+  await insertWork()
+  const permissions = Permission.manageSchedules | Permission.sendMessages | Permission.useAgents | Permission.executeTasks
+  db.prepare("UPDATE roles SET permissions_bitmask=? WHERE id='scheduler'").run(permissions)
+  vi.mocked(piConfigured).mockResolvedValue(true)
+  const member = (await actor())!
+  const request = { ...input(), kind: 'work' as const, agentId: 'agent-user' }
+  const proposal = '00000000-0000-4000-8000-000000000003'
+  const [first, repeated] = await Promise.all([
+    createSchedule(env, member, request, proposal),
+    createSchedule(env, member, request, proposal),
+  ])
+  expect(first).toMatchObject({ id: proposal, taskId: null, agentId: 'agent-user' })
+  expect(first.discussionChannelId).toBeTruthy()
+  expect(repeated.discussionChannelId).toBe(first.discussionChannelId)
+  expect(db.prepare("SELECT count(*) AS count FROM channels WHERE type='conversation'").get()).toMatchObject({ count: 1 })
+})
+
 describe('schedule failures', () => {
   it('records retryable failures with backoff and fails the occurrence once retries are exhausted', async () => {
     const item = await due((await reminder({ recurrence: 'once' })).id)

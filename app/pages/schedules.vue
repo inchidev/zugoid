@@ -76,7 +76,7 @@ async function save() {
   busy.value = true; formError.value = ''
   try {
     const task = tasks.value.find(task => task.id === taskId.value)
-    const work = kind.value === 'work' ? { taskId: taskId.value, agentId: task?.assigneeId } : {}
+    const work = kind.value === 'work' && taskId.value ? { taskId: taskId.value, agentId: task?.assigneeId } : {}
     if (editing.value) {
       const { item, at } = editing.value
       const retimed = resolved.value.at !== at || timezone.value !== item.timezone || recurrence.value !== item.recurrence
@@ -119,7 +119,7 @@ const history = ref<string | null>(null)
             <USelect v-model="kind" class="w-full" :items="actionItems" :disabled="!!editing" />
           </UFormField>
           <UFormField label="Conversation" :help="editing ? 'The conversation cannot change.' : undefined"><USelect v-model="channelId" :items="channelOptions" class="w-full" required :disabled="!!editing" /></UFormField>
-          <UFormField v-if="kind === 'work'" label="Assigned task"><USelect v-model="taskId" :items="tasks.map(task => ({ label: task.title, value: task.id }))" class="w-full" required /></UFormField>
+          <UFormField v-if="kind === 'work' && (!editing || editing.item.taskId)" label="Assigned task"><USelect v-model="taskId" :items="tasks.map(task => ({ label: task.title, value: task.id }))" class="w-full" required /></UFormField>
           <UFormField :label="editing ? 'Next time' : 'First time'" help="Enter time in the selected timezone."><UInput v-model="firstAt" type="datetime-local" class="w-full" required /></UFormField>
           <UFormField label="Repeat"><USelect v-model="recurrence" class="w-full" :items="[{ label: 'Once', value: 'once' }, { label: 'Daily', value: 'daily' }, { label: 'Weekly', value: 'weekly' }]" /></UFormField>
           <UFormField label="Timezone">
@@ -151,7 +151,7 @@ const history = ref<string | null>(null)
             {{ formatScheduleTime(item.nextAt, item.timezone) }} ({{ item.timezone }})<template v-if="item.timezone !== browserZone"> · {{ formatScheduleTime(item.nextAt) }} your time</template> · {{ relativeScheduleTime(item.nextAt) }}
           </template>
           <template v-else>No further deliveries · {{ item.timezone }}</template>
-          · {{ item.kind === 'work' ? 'task run' : 'reminder' }} · {{ item.recurrence }}
+          · {{ item.kind === 'work' ? 'agent run' : 'reminder' }} · {{ item.recurrence }}
         </p>
         <UAlert v-if="item.lastError" :title="item.lastError" :description="scheduleErrorHint(item.lastErrorCode) ?? undefined" :color="item.status === 'blocked' ? 'error' : 'warning'" variant="subtle" />
         <div class="flex flex-wrap gap-1">

@@ -6,7 +6,7 @@ import { compatibleRunHistory } from './agent-context'
 import { fail } from './cf'
 
 export type ToolEffect = 'control' | 'read' | 'write' | 'external' | 'unknown'
-const controls = new Set(['get_current_time', 'search_tools', 'get_tool_details'])
+const controls = new Set(['get_current_time', 'search_tools', 'get_tool_details', 'prepare_work_schedule'])
 /**
  * factory_publish, factory_plan and request_network_window carry their own review: the execution mode gates
  * what leaves the box. factory_merge is the Project's own choice: only its agent_after_checks Git flow offers
@@ -125,7 +125,7 @@ export async function runReport(env: ZugoidEnv, run: AgentRun): Promise<{ text: 
   // The initiating Member chose this conversation as the destination for the answer. An answer
   // drawn from private sources may only be posted where the initiator is the only human reader.
   if ((!run.taskId || mandate.scheduledOrigin) && run.status === 'completed' && run.resultText && autonomousExecution(mandate.execution?.mode)) {
-    const privateSource = Boolean(run.taskId) || await readPrivateSource(env, run)
+    const privateSource = Boolean(run.taskId || mandate.scheduledOrigin) || await readPrivateSource(env, run)
     // A custom connection's answer stays here: the Owner granted it to the person asking, for use where they ask.
     if (!privateSource || await initiatorOnlyAudience(env, run)) {
       return { restricted: false, text: run.resultText.slice(0, AGENT_ANSWER_MAX) }
@@ -140,7 +140,7 @@ export async function runReport(env: ZugoidEnv, run: AgentRun): Promise<{ text: 
  */
 export async function runStreamAudience(env: ZugoidEnv, run: AgentRun): Promise<'channel' | 'initiator'> {
   const mandate = JSON.parse(run.mandateJson) as RunMandate
-  if (run.taskId || !autonomousExecution(mandate.execution?.mode)) return 'initiator'
+  if (run.taskId || mandate.scheduledOrigin || !autonomousExecution(mandate.execution?.mode)) return 'initiator'
   return !await readPrivateSource(env, run) || await initiatorOnlyAudience(env, run) ? 'channel' : 'initiator'
 }
 /** A direct conversation between the initiator and this Agent, including its threads. */

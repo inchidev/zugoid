@@ -13,6 +13,7 @@ import { AGENT_GATEWAY_PATH, agentGateway } from '../server/utils/agent-gateway'
 import type { EmbeddedPiSubmission } from './agent-pi-durable'
 import { agentReplyStream, channelStreams } from './agent-reply-stream'
 import { deliverAgentRun } from '../server/utils/agent-run-delivery'
+import { scheduleProposals } from '../server/utils/schedule-proposals'
 import { agentWebhook, agentWebhookPayload, externalAgentReply, sendAgentWebhook, type AgentWebhook } from '../server/utils/agent-webhooks'
 import { newId, nowIso } from '../shared/ids'
 import { readLimitedStream } from './inbound-email-signature'
@@ -304,7 +305,9 @@ export class AgentRunDurableObject extends DurableObject<ZugoidEnv> {
     if (run.status === 'completed' && await this.ctx.storage.get<boolean>('external') === true) return
     const { text } = await runReport(this.env, run)
     if (!text) return
-    const content = text
+    const proposals = run.sourceMessageId ? await scheduleProposals(this.env, run) : []
+    const reviewLink = proposals.length ? `\n\n[Review proposed schedule](/runs/${run.id})` : ''
+    const content = text.slice(0, 12000 - reviewLink.length) + reviewLink
     await asRpc<{ postAgentMessage: (input: { agentId: string; content: string; sourceRunId: string }) => Promise<unknown> }>(this.env.CHANNEL_DO.getByName(`channel:${run.channelId}`))
       .postAgentMessage({ agentId: run.agentId, content, sourceRunId: run.id })
   }
