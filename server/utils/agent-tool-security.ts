@@ -124,10 +124,12 @@ export async function runReport(env: ZugoidEnv, run: AgentRun): Promise<{ text: 
   const mandate = JSON.parse(run.mandateJson) as RunMandate
   // The initiating Member chose this conversation as the destination for the answer. An answer
   // drawn from private sources may only be posted where the initiator is the only human reader.
-  if (!run.taskId && run.status === 'completed' && run.resultText && autonomousExecution(mandate.execution?.mode)
+  if ((!run.taskId || mandate.scheduledOrigin) && run.status === 'completed' && run.resultText && autonomousExecution(mandate.execution?.mode)) {
+    const privateSource = Boolean(run.taskId) || await readPrivateSource(env, run)
     // A custom connection's answer stays here: the Owner granted it to the person asking, for use where they ask.
-    && (!await readPrivateSource(env, run) || await initiatorOnlyAudience(env, run))) {
-    return { restricted: false, text: run.resultText.slice(0, AGENT_ANSWER_MAX) }
+    if (!privateSource || await initiatorOnlyAudience(env, run)) {
+      return { restricted: false, text: run.resultText.slice(0, AGENT_ANSWER_MAX) }
+    }
   }
   return { restricted: true, text: `Run ${run.status}. ${PRIVATE_RUN_SUMMARY}\n\n[Open private Run](/runs/${run.id})` }
 }

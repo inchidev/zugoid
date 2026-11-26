@@ -7,7 +7,8 @@ import { loadAuthorizationContext } from '../../server/utils/authorization'
 import { cancelSchedule, createSchedule, dismissSchedule, executeScheduledOccurrence, findSchedule, listScheduleOccurrences, listSchedules, pauseSchedule,
   recordScheduleFailure, resumeSchedule, scheduleAuthorization, SCHEDULE_RETRY_DELAYS, updateSchedule } from '../../server/utils/schedule-service'
 import { sendChannelMessage } from '../../server/utils/message-service'
-import { piConfigured } from '../../server/utils/agent-run-service'
+import { createAgentRun, piConfigured } from '../../server/utils/agent-run-service'
+import { requireChannelAccessForMember, requireMemberForUser } from '../../server/utils/channel-access'
 import { nextScheduleAt } from '../../shared/schedules'
 import { createError } from 'h3'
 import type { ZugoidEnv } from '../../workers/env'
@@ -17,7 +18,10 @@ let db: DatabaseSync
 let env: ZugoidEnv
 const wake = vi.fn()
 vi.mock('../../server/utils/message-service', () => ({ sendChannelMessage: vi.fn() }))
-vi.mock('../../server/utils/agent-run-service', async original => ({ ...await original<object>(), piConfigured: vi.fn(async () => false) }))
+vi.mock('../../server/utils/agent-run-service', async original => {
+  const service = await original<typeof import('../../server/utils/agent-run-service')>()
+  return { ...service, piConfigured: vi.fn(async () => false), createAgentRun: vi.fn(service.createAgentRun) }
+})
 vi.mock('cloudflare:workers', () => ({ DurableObject: class { constructor(protected ctx: unknown, protected env: unknown) {} } }))
 beforeEach(() => {
   wake.mockReset()
@@ -105,6 +109,42 @@ async function insertWork(taskStatus = 'ready', assignee: string | null = 'agent
 }
 const occurrence = (id: string) => db.prepare('SELECT attempts,failed_at as failedAt,last_error as lastError FROM agent_schedule_occurrences WHERE schedule_id=?').get(id) as { attempts: number; failedAt: string | null; lastError: string | null }
 const failureOf = (promise: Promise<unknown>) => promise.then(() => { throw new Error('Expected a failure') }, (error: unknown) => error)
+
+it('keeps two occurrences in one chat and inherits the source audience', async () => {
+  await insertWork()
+  const permissions = Permission.manageSchedules | Permission.sendMessages | Permission.useAgents | Permission.executeTasks | Permission.readTasks
+  db.prepare("UPDATE roles SET permissions_bitmask=? WHERE id='scheduler'").run(permissions)
+  db.exec("INSERT INTO channel_members(channel_id,user_id,joined_at) VALUES('private-channel','human-user','2026-10-21'),('private-channel','agent-user','2026-10-21')")
+  vi.mocked(piConfigured).mockResolvedValue(true)
+  const schedule = await createSchedule(env, (await actor())!, { ...input(), channelId: 'private-channel', kind: 'work', taskId: 'task-0001', agentId: 'agent-user' })
+  const discussionId = schedule.discussionChannelId!
+  expect(db.prepare('SELECT parent_id,type FROM channels WHERE id=?').get(discussionId)).toMatchObject({ parent_id: 'private-channel', type: 'conversation' })
+  const member = (id: string) => requireMemberForUser(env, { id, displayName: id, kind: 'human', avatarR2Key: null }, '00000000-0000-4000-8000-000000000001')
+  await expect(requireChannelAccessForMember(env, member('owner-user'), discussionId)).rejects.toMatchObject({ statusCode: 404 })
+  db.exec("INSERT INTO channel_members(channel_id,user_id,joined_at) VALUES('private-channel','owner-user','2026-10-21')")
+  await expect(requireChannelAccessForMember(env, member('owner-user'), discussionId)).resolves.toMatchObject({ channel: { id: discussionId } })
+
+  // The agent runtime is not needed to verify what both alarm deliveries dispatch.
+  const started = vi.mocked(createAgentRun)
+  started.mockClear()
+  try {
+    started.mockImplementation(async (_env, _actor, request) => {
+      const stamp = new Date().toISOString()
+      db.prepare('INSERT OR IGNORE INTO agent_sessions(id,agent_id,channel_id,created_at,updated_at) VALUES(?,?,?,?,?)').run('session-1', request.agentId, request.channelId, stamp, stamp)
+      const id = `run-${started.mock.calls.length}`
+      db.prepare(`INSERT INTO agent_runs(id,session_id,agent_id,channel_id,initiated_by,idempotency_key,status,prompt,model,instructions,mandate_json,deadline,created_at,updated_at)
+        VALUES(?,'session-1',?,?,'human-user',?,'queued',?,'model','','{}',?,?,?)`).run(id, request.agentId, request.channelId, request.idempotencyKey, request.prompt, stamp, stamp, stamp)
+      return { id } as Awaited<ReturnType<typeof createAgentRun>>
+    })
+    await executeScheduledOccurrence(env, await due(schedule.id, new Date(Date.now() - 2000).toISOString()), () => {})
+    await executeScheduledOccurrence(env, await due(schedule.id), () => {})
+    const calls = started.mock.calls
+    expect(calls.map(call => call[2].channelId)).toEqual([discussionId, discussionId])
+    expect(calls.map(call => call[4]?.channelId)).toEqual(['private-channel', 'private-channel'])
+    expect(calls[0]?.[4]?.messageId).not.toBe(calls[1]?.[4]?.messageId)
+    expect((await listScheduleOccurrences(env, (await actor())!, schedule.id)).map(item => item.runId)).toEqual(['run-2', 'run-1'])
+  } finally { started.mockReset() }
+})
 
 describe('schedule failures', () => {
   it('records retryable failures with backoff and fails the occurrence once retries are exhausted', async () => {

@@ -2,7 +2,7 @@ import { chatAttention } from './chat-attention'
 import { chatAlertRecipients } from './chat-alerts'
 import { getServerId } from '../shared/server-id'
 import { notificationPreview } from '../shared/notifications'
-import { channelPath } from '../shared/paths'
+import { channelPath, scheduleConversationPath } from '../shared/paths'
 import type { PublicUser } from '../shared/types'
 import type { ServerChannelActivityEvent, ServerChannelReadEvent } from '../shared/server-realtime'
 import { asRpc, type ZugoidEnv } from './env'
@@ -86,17 +86,18 @@ export async function signalChannelActivity(
     await env.DB.prepare('UPDATE channel_members SET hidden_at = NULL WHERE channel_id = ?').bind(audience.rootChannelId).run()
   }
   if (!audience.recipientIds.length) return
+  const schedule = await env.DB.prepare('SELECT id FROM agent_schedules WHERE discussion_channel_id=?').bind(message.channelId).first<{ id: string }>()
   const event: ServerChannelActivityEvent = {
     t: 'channel.activity',
     sourceChannelId: audience.sourceChannelId,
     rootChannelId: audience.rootChannelId,
     messageId: message.id,
     notification: {
-      title: audience.rootType === 'dm'
+      title: schedule ? 'Scheduled work' : audience.rootType === 'dm'
         ? message.author.displayName
         : `${message.author.displayName} in #${audience.rootName}`,
       body: notificationPreview(message.content, message.attachmentCount),
-      url: audience.sourceChannelId === audience.rootChannelId
+      url: schedule ? scheduleConversationPath(schedule.id) : audience.sourceChannelId === audience.rootChannelId
         ? channelPath(audience.rootChannelId)
         : channelPath(audience.rootChannelId, audience.sourceChannelId),
     },

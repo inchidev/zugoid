@@ -1,5 +1,6 @@
 import { advanceChatRead, chatAttention } from './chat-attention'
-import { AGENT_ANSWER_MAX } from '../shared/agent-execution'
+import { AGENT_ANSWER_MAX, type RunMandate } from '../shared/agent-execution'
+import { scheduleConversationPath } from '../shared/paths'
 import { authorizedPublicationMessage } from '../server/utils/run-publication'
 import { retryDeletedFiles } from '../shared/file-cleanup'
 import { messageDeleteRole, messageSendRate, removeChannelMessage, takeRate } from '../server/utils/message-service'
@@ -82,6 +83,7 @@ const updateSchema = z.object({
 
 const agentPostSchema = z.object({
   sourceRunId: z.string().uuid().optional(),
+  sourceScheduleRunId: z.string().uuid().optional(),
   sourcePublicationId: z.string().uuid().optional(),
   agentId: z.string().min(8),
   // A Run's answer can be long; a person's message stays at 2,000 characters.
@@ -334,8 +336,19 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       throw new Error('Agent cannot send in this mailbox')
     }
 
-    if (body.sourceRunId && body.sourcePublicationId) throw new Error('Ambiguous publication identity')
+    if ([body.sourceRunId, body.sourcePublicationId, body.sourceScheduleRunId].filter(Boolean).length > 1) throw new Error('Ambiguous publication identity')
     let id = newId()
+    let content = body.content
+    if (body.sourceScheduleRunId) {
+      const run = await this.env.DB.prepare("SELECT mandate_json as mandate FROM agent_runs WHERE id=? AND agent_id=? AND status='running'")
+        .bind(body.sourceScheduleRunId, body.agentId).first<{ mandate: string }>()
+      const origin = run && (JSON.parse(run.mandate) as RunMandate).scheduledOrigin
+      if (!origin || origin.channelId !== channel.id) throw new Error('Scheduled Run is not active in this conversation')
+      id = origin.messageId
+      content = `Scheduled run started. [Open schedule chat](${scheduleConversationPath(origin.scheduleId)})`
+      const previous = await this.env.DB.prepare('SELECT id FROM messages WHERE id=? AND channel_id=? AND author_id=?').bind(id, channel.id, agent.id).first()
+      if (previous) return { id, channelId: channel.id }
+    }
     if (body.sourcePublicationId) {
       id = await authorizedPublicationMessage(this.env, channel.id, { ...body, sourcePublicationId: body.sourcePublicationId })
       const previous = await this.env.DB.prepare('SELECT id FROM messages WHERE id=? AND channel_id=? AND author_id=?').bind(id, channel.id, agent.id).first()
@@ -355,7 +368,7 @@ export class ChannelDurableObject extends DurableObject<ZugoidEnv> {
       channelId: channel.id,
       serverId: (await getServerId(this.env.DB)),
       author: agent,
-      content: body.content,
+      content,
       replyTo: null,
       mentions: [],
       attachments: [],

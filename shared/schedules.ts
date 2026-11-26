@@ -43,6 +43,7 @@ export const schedulePatchSchema = z.discriminatedUnion('action', [scheduleActio
 export type ScheduleStatus = 'active' | 'paused' | 'completed' | 'cancelled' | 'blocked'
 export type Schedule = {
   id: string; principalId: string; createdBy: string; channelId: string; kind: 'reminder' | 'work'; content: string
+  discussionChannelId: string | null
   agentId: string | null; taskId: string | null; firstAt: string; timezone: string; recurrence: 'once' | 'daily' | 'weekly'
   nextAt: string | null; status: ScheduleStatus; lastError: string | null; lastErrorCode: string | null
   authorizationJson: string; mandateJson: string | null; createdAt: string

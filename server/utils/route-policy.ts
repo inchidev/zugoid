@@ -295,6 +295,7 @@ export const ROUTE_POLICIES: Readonly<Record<string, RoutePolicy>> = {
   'push/subscriptions.put': forAccount('push-subscriptions.update'),
   'schedules/[id].delete': inSpace('schedule', 'id', 'schedule.delete'),
   'schedules/[id].patch': inSpace('schedule', 'id', 'schedule.update'),
+  'schedules/[id]/discussion.get': inSpace('schedule', 'id', 'schedule.read'),
   'schedules/[id]/occurrences.get': inSpace('schedule', 'id', 'schedule.read'),
   'schedules/index.get': inActiveSpace('schedule.read'),
   'schedules/index.post': inActiveSpace('schedule.create'),

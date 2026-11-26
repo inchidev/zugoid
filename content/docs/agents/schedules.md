@@ -42,6 +42,7 @@ The list has **Current**, **Active**, **Paused**, **Blocked** and **History** fi
 - **Cancel** it.
 - **Remove** a completed or cancelled Schedule from your list.
 - Open **History** to see recent occurrences with links to the delivered message or started Run.
+- Select **Open chat** on recurring work to see its runs in one conversation. When a Run starts, the Agent posts a short notice with a link in the conversation you selected. The schedule chat inherits access from that conversation. To share a private result with teammates, open the Run and select **Review sharing**.
 
 Editing saves your current permissions as the Schedule's new ceiling. It never brings back a permission removed since you created it. While an occurrence is being delivered, you cannot change the time of an active Schedule; pause it first or wait until it finishes.
 
