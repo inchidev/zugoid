@@ -8,7 +8,7 @@ A Schedule triggers a reminder or Agent work at a time you choose, once, daily o
 
 ## Who can use Schedules
 
-Schedules need **Manage schedules** in your Role. No Role has it by default, not even Admin. With this permission and the **Agents** module enabled, **Scheduled** appears next to **Inbox** in the rail.
+Schedules need **Manage schedules** in your Role. With this permission and the **Agents** module enabled, **Scheduled** appears next to **Inbox** in the rail.
 
 Recurring Agent work additionally needs **Execute assigned tasks** and **Use agents** for you, and **Execute assigned tasks** for the Agent. Repository work also needs **Use a computer** for both.
 
