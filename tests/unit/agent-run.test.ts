@@ -296,7 +296,9 @@ it('blocks model-selected search while retaining the bounded provider adapter', 
   const run = await createAgentRun(env, (await start())!, { ...input(), idempotencyKey: 'web-authorized-run' })
   db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
   const network = vi.fn(async (_url: unknown, init: RequestInit) => {
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'fixture', plugins: [{ id: 'web', engine: 'exa', max_results: 3 }] })
+    const request: unknown = JSON.parse(String(init.body))
+    expect(request).toMatchObject({ model: 'fixture', tools: [{ type: 'openrouter:web_search', parameters: { engine: 'exa', max_uses: 2, max_results: 3, max_characters: 2000 } }] })
+    expect(request).not.toHaveProperty('plugins')
     return Response.json({ choices: [{ message: { content: 'Verified source', annotations: [{ type: 'url_citation', url_citation: { url: 'https://example.com/source', title: 'Source' } }] } }], usage: { total_tokens: 42 } })
   })
   vi.stubGlobal('fetch', network)
@@ -310,6 +312,32 @@ it('blocks model-selected search while retaining the bounded provider adapter', 
     db.prepare('UPDATE agent_runs SET model_calls=20 WHERE id=?').run(run.id)
     await expect(searchRunWeb(env, (await findAgentRun(env, run.id))!, 'One more')).rejects.toMatchObject({ statusCode: 400 })
     expect(network).toHaveBeenCalledTimes(1)
+  } finally { vi.unstubAllGlobals() }
+})
+
+it('returns cited studio and game asset sources in an Agent Run and rejects unsupported links in model text', async () => {
+  await saveAgentProvider(env, 'openrouter', { enabled: true, webSearch: true, apiKey: 'search-key', models: [{ id: 'fixture:online', api: 'chat' }] })
+  await writeServerSetting(env.DB, 'ai.function.web.search', JSON.stringify({ model: 'zugoid:openrouter:fixture:online' }))
+  await writeServerSetting(env.DB, 'agents.executionPolicy', JSON.stringify({ mode: 'role' }))
+  db.prepare("UPDATE roles SET permissions_bitmask=permissions_bitmask|? WHERE id='agent-role'").run(Permission.browseWeb)
+  const run = await createAgentRun(env, (await start())!, input())
+  db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+  const sources = [
+    { url: 'https://www.virtuosgames.com/studio/glass-egg/', title: 'Glass Egg', content: 'Game art studio in Ho Chi Minh City' },
+    { url: 'https://store.godotengine.org/asset/kenney/starter-kit-match-3/', title: 'Starter Kit Match-3', content: 'CC0 sprites' },
+  ]
+  const network = vi.fn<typeof fetch>()
+    .mockImplementationOnce(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'fixture' })
+      return Response.json({ choices: [{ message: { content: 'Studio and asset examples', annotations: sources.map(source => ({ type: 'url_citation', url_citation: source })) } }], usage: { total_tokens: 52 } })
+    })
+    .mockImplementationOnce(async () => Response.json({ choices: [{ message: { content: 'Found a [source](https://example.com/unverified)' } }], usage: { total_tokens: 8 } }))
+  vi.stubGlobal('fetch', network)
+  const search = (callId: string, query: string) => executeRunTool(env, run.id, { callId, name: 'search_web', arguments: { query } }, () => {})
+  try {
+    await expect(search('cited-sources', 'Find a game art studio in Vietnam and a CC0 Godot puzzle sprite pack')).resolves.toMatchObject({ sources: sources.map(({ url, title, content }) => ({ url, title, excerpt: content })) })
+    await expect(search('uncited-sources', 'Find more sources')).rejects.toMatchObject({ statusCode: 502, data: { error: { code: 'search_no_sources' } } })
+    expect((await findAgentRun(env, run.id))?.totalTokens).toBe(60)
   } finally { vi.unstubAllGlobals() }
 })
 

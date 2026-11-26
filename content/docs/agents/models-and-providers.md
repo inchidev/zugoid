@@ -49,7 +49,7 @@ An Exa key is the other way to search. Enter it in **Server settings → Integra
 
 ### OpenRouter web search
 
-An OpenRouter connection has a **Web search** switch. It lets Agents with **Research the web** search through OpenRouter. Additional OpenRouter charges apply. To use it, also assign a model to the **Web search** AI function (see below).
+An OpenRouter connection has a **Web search** switch. It lets Agents with **Research the web** search through OpenRouter. Additional OpenRouter charges apply. To use it, assign a model that supports tool calls to the **Web search** AI function (see below). If a previously assigned model is marked **Unavailable**, choose one that supports tool calls.
 
 ## Connect ChatGPT
 
@@ -87,7 +87,7 @@ AI functions are small Server jobs that use a model directly, without an Agent. 
 | --- | --- |
 | Help with Apps | Drafts Apps from Database Views. Apps are paused in this release. |
 | Thread titles | Names new Threads from their first message. Existing titles stay. |
-| Web search | Search for Agents. Choose an OpenRouter model with web search enabled. An Exa key under **Server settings → Integrations** takes precedence. |
+| Web search | Search for Agents. Choose a model that supports tool calls on an OpenRouter connection with **Web search** enabled. An Exa key under **Server settings → Integrations** takes precedence. |
 | Images | Draws pictures an Agent asks for while it works in a Task's box, such as the art of a game, and saves each as a file in its checkout. Needs an OpenRouter model that outputs images. Without one, Agents use the Avatars model, or else Nano Banana on the Server's OpenRouter connection. |
 | Avatars | Draws profile pictures for Members and Agents. Needs an OpenRouter model that outputs images, such as Nano Banana. |
 | Image descriptions | Describes attached images for Agents whose model cannot see them. |

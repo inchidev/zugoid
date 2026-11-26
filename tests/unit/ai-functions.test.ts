@@ -36,11 +36,21 @@ it('requires owner authorization to assign a model and rejects ambient deploymen
 it('fails closed when a selected connection is disabled and never chooses its first model', async () => {
   await saveAgentProvider(env, 'named', config)
   await saveAgentProvider(env, 'other', config)
-  await saveAiFunction(env, authorization, 'web.search', { model: 'zugoid:named:chosen' })
-  expect(await resolveAiFunction(env, 'web.search', 'owner')).toBe('zugoid:named:chosen')
+  await saveAiFunction(env, authorization, 'web.search', { model: 'zugoid:named:first' })
+  expect(await resolveAiFunction(env, 'web.search', 'owner')).toBe('zugoid:named:first')
   await saveAgentProvider(env, 'named', { ...config, enabled: false })
   await expect(resolveAiFunction(env, 'web.search', 'owner')).rejects.toMatchObject({ statusCode: 409 })
-  expect((await aiFunctionCatalog(env, 'owner')).functions.find(entry => entry.id === 'web.search')?.model).toBe('zugoid:named:chosen')
+  expect((await aiFunctionCatalog(env, 'owner')).functions.find(entry => entry.id === 'web.search')?.model).toBe('zugoid:named:first')
+})
+it('excludes models that lack tool support and marks existing search assignments unavailable', async () => {
+  await saveAgentProvider(env, 'named', config)
+  const model = 'zugoid:named:chosen'
+  await expect(saveAiFunction(env, authorization, 'web.search', { model })).rejects.toMatchObject({ statusCode: 400 })
+  await writeServerSetting(env.DB, aiFunctionKey('web.search'), JSON.stringify({ model }))
+  const catalog = await aiFunctionCatalog(env, 'owner')
+  expect(catalog.models.find(option => option.value === model)?.webSearch).toBe(false)
+  expect(catalog.functions.find(entry => entry.id === 'web.search')).toMatchObject({ model, available: false })
+  await expect(resolveAiFunction(env, 'web.search', 'owner')).rejects.toMatchObject({ statusCode: 409 })
 })
 it('requires explicit web-search enablement and respects later revocation', async () => {
   await saveAgentProvider(env, 'named', { ...config, webSearch: false })

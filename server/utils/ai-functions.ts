@@ -1,12 +1,12 @@
 import { streamText } from 'ai'
 import { aiFunctions, aiFunctionConfigSchema, drawingAiFunctions, modelMeetsRequirement, type AiFunctionId, type ImageAspectRatio, type AiFunctionConfig, type AiFunctionDTO } from '../../shared/ai-functions'
-import { agentModelRef, parseAgentModelRef } from '../../shared/agent-providers'
+import { agentModelRef, parseAgentModelRef, type AgentProviderModel } from '../../shared/agent-providers'
 import { pausedAiFunctions } from '../../shared/features'
 import { readServerSetting } from '../../shared/server-settings'
 import { modelForRun } from '../../workers/ai-runtime'
 import type { ZugoidEnv } from '../../workers/env'
 import type { AuthorizationContext } from '../../shared/authorization'
-import { agentProviderCatalog, agentProviderScope, chatGPTUsableBy, loadAgentProvider, resolveSavedAgentModel } from './agent-providers'
+import { agentProviderCatalog, agentProviderScope, chatGPTUsableBy, loadAgentProvider, resolveSavedAgentModel, type StoredAgentProvider } from './agent-providers'
 import { decryptSecret } from '../../shared/encrypted-secret'
 import { readLimitedStream } from '../../workers/inbound-email-signature'
 import { asRpc, fail } from './cf'
@@ -21,9 +21,15 @@ export async function aiFunctionConfig(env: ZugoidEnv, id: AiFunctionId): Promis
   catch { fail(409, 'ai_function_invalid', 'This AI function has an invalid configuration. Choose its model again in Providers.') }
 }
 
+function webSearchModel(provider: Pick<StoredAgentProvider, 'kind' | 'webSearch'>, model: AgentProviderModel) {
+  return provider.kind === 'openrouter' && provider.webSearch === true && model.tools !== false
+}
+
 /** Function choices are independent of Agent profiles and the Server default. */
 export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
   const catalog = await agentProviderCatalog(env, { actorId, requireTools: false })
+  const webSearchModels = new Set(catalog.providers.flatMap(provider => provider.models
+    .filter(model => webSearchModel(provider, model)).map(model => agentModelRef(provider.id, model.id))))
   const functions: AiFunctionDTO[] = await Promise.all(aiFunctions.filter(definition => !pausedAiFunctions.has(definition.id)).map(async definition => {
     let config: AiFunctionConfig
     try { config = await aiFunctionConfig(env, definition.id) }
@@ -33,11 +39,11 @@ export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
     const chosen = provider?.models.find(model => model.id === selected!.model)
     const requires = 'requires' in definition ? definition.requires : undefined
     const available = Boolean(provider?.configured && provider.enabled && chosen && modelMeetsRequirement(chosen, requires)
-      && (definition.id !== 'web.search' || (provider.kind === 'openrouter' && provider.webSearch))
+      && (definition.id !== 'web.search' || webSearchModel(provider, chosen))
       && (!drawingAiFunctions.has(definition.id) || provider.kind === 'openrouter'))
     return { ...definition, ...config, available, ...(chosen && provider ? { modelLabel: `${provider.name} / ${chosen.label || chosen.id}` } : {}) }
   }))
-  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: catalog.providers.some(provider => provider.id === parseAgentModelRef(model.value)?.provider && provider.kind === 'openrouter' && provider.webSearch) })) }
+  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: webSearchModels.has(model.value) })) }
 }
 
 export async function saveAiFunction(env: ZugoidEnv, authorization: AuthorizationContext, id: AiFunctionId, config: AiFunctionConfig) {
@@ -45,17 +51,12 @@ export async function saveAiFunction(env: ZugoidEnv, authorization: Authorizatio
   if (config.model) {
     if (!parseAgentModelRef(config.model)) fail(400, 'model_unavailable', 'Choose a named provider connection and model')
     const catalog = await aiFunctionCatalog(env, authorization.principal.id)
-    if (!catalog.models.some(model => model.value === config.model)) fail(400, 'model_unavailable', 'Choose an available model')
+    const option = catalog.models.find(model => model.value === config.model)
+    if (!option) fail(400, 'model_unavailable', 'Choose an available model')
     const definition = aiFunctions.find(item => item.id === id)!
-    const option = catalog.models.find(model => model.value === config.model)!
     if ('requires' in definition && !modelMeetsRequirement(option, definition.requires)) fail(400, 'model_capability', `${definition.label} needs a model that ${definition.requires === 'image-output' ? 'outputs images' : definition.requires === 'image-input' ? 'reads images' : 'reads audio'}. Load the provider's models again if it should.`)
     if (drawingAiFunctions.has(id) && (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parseAgentModelRef(option.value)?.provider)?.kind !== 'openrouter') fail(400, 'model_capability', `${definition.label} currently draw with an OpenRouter image model`)
-    if (id === 'web.search') {
-      const provider = catalog.models.find(model => model.value === config.model)
-      const parsed = parseAgentModelRef(provider!.value)!
-      const connection = (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parsed.provider)
-      if (connection?.kind !== 'openrouter' || !connection.webSearch) fail(400, 'search_unavailable', 'Choose an OpenRouter connection with web search enabled')
-    }
+    if (id === 'web.search' && !option.webSearch) fail(400, 'search_unavailable', 'Choose a model that supports tool calls on an OpenRouter connection with Web search enabled')
   }
   await env.DB.batch([
     env.DB.prepare('INSERT INTO server_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at')
@@ -70,10 +71,12 @@ export async function resolveAiFunction(env: ZugoidEnv, id: AiFunctionId, actorI
   if (!config.model) fail(409, 'ai_function_unconfigured', `Choose a model for ${definition.label} in Settings → Agents → Providers`)
   const selected = parseAgentModelRef(config.model)
   const provider = selected ? await loadAgentProvider(env, selected.provider) : null
-  if (!selected || !provider?.enabled || !provider.secret || !provider.models.some(model => model.id === selected.model)
-    || (provider.kind === 'chatgpt' && !chatGPTUsableBy(provider, actorId))
-    || (id === 'web.search' && (provider.kind !== 'openrouter' || !provider.webSearch))) {
+  const model = provider?.models.find(model => model.id === selected?.model)
+  if (!provider?.enabled || !provider.secret || !model || (provider.kind === 'chatgpt' && !chatGPTUsableBy(provider, actorId))) {
     fail(409, 'ai_function_unavailable', `${definition.label} uses an unavailable connection or model. Update its assignment in Providers.`)
+  }
+  if (id === 'web.search' && !webSearchModel(provider, model)) {
+    fail(409, 'ai_function_unavailable', 'Web search needs an OpenRouter model that supports tool calls on a connection with Web search enabled. Update its assignment in Models → Defaults.')
   }
   return config.model
 }
