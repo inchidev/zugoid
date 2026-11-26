@@ -3,6 +3,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/vue-query'
 import type { ChannelDTO, TaskAgentDTO, TaskBoardDTO } from '~~/shared/types'
 import { formatScheduleTime, relativeScheduleTime, resolveScheduleTime, scheduleEditable, scheduleErrorHint, scheduleLocalTime, type PublicSchedule, type ScheduleListPage, type ScheduleStatusFilter } from '~~/shared/schedules'
 import { Permission } from '~~/shared/permissions'
+import { scheduleConversationPath } from '~~/shared/paths'
 
 definePageMeta({ layout: 'server', middleware: ['auth'] })
 const { api } = useApi()
@@ -10,6 +11,8 @@ const { serverId } = useServer()
 const { can } = useRoleGrants()
 const toast = useToast()
 const session = useSessionStore()
+const route = useRoute()
+const openSchedule = computed(() => typeof route.query.schedule === 'string' ? route.query.schedule : '')
 const busy = ref(false)
 const content = ref('')
 const channelId = ref('')
@@ -73,7 +76,7 @@ async function save() {
   busy.value = true; formError.value = ''
   try {
     const task = tasks.value.find(task => task.id === taskId.value)
-    const work = kind.value === 'work' ? { taskId: taskId.value, agentId: task?.assigneeId } : {}
+    const work = kind.value === 'work' && taskId.value ? { taskId: taskId.value, agentId: task?.assigneeId } : {}
     if (editing.value) {
       const { item, at } = editing.value
       const retimed = resolved.value.at !== at || timezone.value !== item.timezone || recurrence.value !== item.recurrence
@@ -101,7 +104,8 @@ const history = ref<string | null>(null)
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 min-w-0 flex-col">
+  <SchedulesDiscussion v-if="openSchedule" :key="openSchedule" :schedule-id="openSchedule" />
+  <div v-else class="flex h-full min-h-0 min-w-0 flex-col">
     <LayoutPageHeader title="Scheduled" icon="i-ph-clock" />
     <main class="mx-auto w-full max-w-3xl flex-1 space-y-6 overflow-auto p-4 sm:p-8">
     <h2 class="text-lg font-medium">Reminders and recurring work</h2>
@@ -115,7 +119,7 @@ const history = ref<string | null>(null)
             <USelect v-model="kind" class="w-full" :items="actionItems" :disabled="!!editing" />
           </UFormField>
           <UFormField label="Conversation" :help="editing ? 'The conversation cannot change.' : undefined"><USelect v-model="channelId" :items="channelOptions" class="w-full" required :disabled="!!editing" /></UFormField>
-          <UFormField v-if="kind === 'work'" label="Assigned task"><USelect v-model="taskId" :items="tasks.map(task => ({ label: task.title, value: task.id }))" class="w-full" required /></UFormField>
+          <UFormField v-if="kind === 'work' && (!editing || editing.item.taskId)" label="Assigned task"><USelect v-model="taskId" :items="tasks.map(task => ({ label: task.title, value: task.id }))" class="w-full" required /></UFormField>
           <UFormField :label="editing ? 'Next time' : 'First time'" help="Enter time in the selected timezone."><UInput v-model="firstAt" type="datetime-local" class="w-full" required /></UFormField>
           <UFormField label="Repeat"><USelect v-model="recurrence" class="w-full" :items="[{ label: 'Once', value: 'once' }, { label: 'Daily', value: 'daily' }, { label: 'Weekly', value: 'weekly' }]" /></UFormField>
           <UFormField label="Timezone">
@@ -147,10 +151,11 @@ const history = ref<string | null>(null)
             {{ formatScheduleTime(item.nextAt, item.timezone) }} ({{ item.timezone }})<template v-if="item.timezone !== browserZone"> · {{ formatScheduleTime(item.nextAt) }} your time</template> · {{ relativeScheduleTime(item.nextAt) }}
           </template>
           <template v-else>No further deliveries · {{ item.timezone }}</template>
-          · {{ item.kind === 'work' ? 'task run' : 'reminder' }} · {{ item.recurrence }}
+          · {{ item.kind === 'work' ? 'agent run' : 'reminder' }} · {{ item.recurrence }}
         </p>
         <UAlert v-if="item.lastError" :title="item.lastError" :description="scheduleErrorHint(item.lastErrorCode) ?? undefined" :color="item.status === 'blocked' ? 'error' : 'warning'" variant="subtle" />
         <div class="flex flex-wrap gap-1">
+          <UButton v-if="item.discussionChannelId" label="Open chat" icon="i-ph-chat" :to="scheduleConversationPath(item.id)" color="neutral" variant="ghost" size="sm" />
           <UButton v-if="canEdit(item)" label="Edit" color="neutral" variant="ghost" size="sm" @click="startEdit(item)" />
           <UButton v-if="item.status === 'active'" label="Pause" color="neutral" variant="ghost" size="sm" @click="act(item, 'pause')" />
           <UButton v-if="item.status === 'paused' || item.status === 'blocked'" label="Resume" color="neutral" variant="ghost" size="sm" @click="act(item, 'resume')" />

@@ -40,6 +40,7 @@ beforeEach(() => {
     CREATE TABLE message_mentions (message_id TEXT, user_id TEXT);
     CREATE TABLE channel_attention (channel_id TEXT, user_id TEXT, following INTEGER, notifications TEXT);
     CREATE TABLE tasks (discussion_channel_id TEXT);
+    CREATE TABLE agent_schedules (id TEXT, discussion_channel_id TEXT);
     CREATE TABLE email_mailboxes (channel_id TEXT);
     CREATE TABLE users (id TEXT PRIMARY KEY, status TEXT NOT NULL);
     CREATE TABLE space_members (space_id TEXT NOT NULL DEFAULT 'space', user_id TEXT NOT NULL);

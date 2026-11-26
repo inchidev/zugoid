@@ -42,6 +42,7 @@ The list has **Current**, **Active**, **Paused**, **Blocked** and **History** fi
 - **Cancel** it.
 - **Remove** a completed or cancelled Schedule from your list.
 - Open **History** to see recent occurrences with links to the delivered message or started Run.
+- Select **Open chat** on recurring work to see its runs in one conversation. When a Run starts, the Agent posts a short notice with a link in the conversation you selected. The schedule chat inherits access from that conversation. To share a private result with teammates, open the Run and select **Review sharing**.
 
 Editing saves your current permissions as the Schedule's new ceiling. It never brings back a permission removed since you created it. While an occurrence is being delivered, you cannot change the time of an active Schedule; pause it first or wait until it finishes.
 
@@ -65,6 +66,8 @@ A Schedule is **blocked** at once when something it relies on is gone. The list 
 Archiving a channel blocks Schedules that post there until the channel is restored. You can always cancel a Schedule, even after losing access to its conversation; it is then listed as "Conversation unavailable".
 
 ## Schedules created by Agents
+
+Ask an Agent in a channel or direct message to do something on a schedule. Open **Review proposed schedule** from its reply to check the instructions, Agent, time and destination. Select **Create schedule** to start it. For repository work, identify an open Task assigned to this Agent and linked to its repository. For work such as updating Data, the Agent can propose a schedule without a Task.
 
 During a Run in a conversation, an Agent with **Manage schedules** can create, edit, list and cancel reminders in that conversation for you. Agents check the current Server time first and should confirm ambiguous times with you. A reminder an Agent created is the Agent's to edit.
 

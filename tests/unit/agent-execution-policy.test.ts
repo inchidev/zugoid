@@ -5,6 +5,7 @@ import { defaultAgentExecutionPolicy } from '../../shared/agent-execution-policy
 import { executeRunTool, toolsForRun } from '../../server/utils/agent-tools'
 import { findAgentRun, runAuthorization } from '../../server/utils/agent-run-service'
 import { markUntrustedContext, toolSecurityReason } from '../../server/utils/agent-tool-security'
+import { scheduleProposals } from '../../server/utils/schedule-proposals'
 let f: ReturnType<typeof mcpFixture>
 beforeEach(() => {
   f = mcpFixture()
@@ -13,6 +14,20 @@ beforeEach(() => {
   f.db.prepare('INSERT INTO task_boards(id,name,created_by) VALUES(?,?,?)').run('test-board', 'Work', ids.owner)
 })
 afterEach(() => f.db.close())
+it('prepares work from a chat Run without starting a schedule before confirmation', async () => {
+  const { run } = await f.run()
+  f.env.AGENT_SCHEDULE_DO = {} as typeof f.env.AGENT_SCHEDULE_DO
+  f.db.prepare("INSERT INTO messages(id,channel_id,author_id,content,created_at) VALUES('schedule-message','public-chat',?,'Sync the lists each week',?)").run(ids.owner, new Date().toISOString())
+  f.db.prepare("UPDATE agent_runs SET source_message_id='schedule-message' WHERE id=?").run(run.id)
+  const args = { content: 'Sync the lists', firstAt: new Date(Date.now() + 60000).toISOString(), timezone: 'UTC', recurrence: 'weekly' }
+  const call = { callId: 'prepare', name: 'prepare_work_schedule', arguments: args }
+  const proposed = await executeRunTool(f.env, run.id, call, () => {})
+  expect(proposed).toMatchObject({ input: { ...args, kind: 'work', channelId: 'public-chat', agentId: ids.agent } })
+  expect(await executeRunTool(f.env, run.id, call, () => {})).toEqual(proposed)
+  expect(await scheduleProposals(f.env, run)).toEqual([])
+  expect(await scheduleProposals(f.env, { ...run, status: 'completed' })).toEqual([{ ...(proposed as object), confirmed: false }])
+  expect(f.db.prepare('SELECT count(*) AS n FROM agent_schedules').get()!.n).toBe(0)
+})
 it('admits generous role-authorized limits and exposes permitted writes after reading untrusted content', async () => {
   const { run, authorization } = await f.run()
   expect(JSON.parse(run.mandateJson)).toMatchObject({ execution: defaultAgentExecutionPolicy(), maxToolCalls: 4096, maxTokens: 20000000 })

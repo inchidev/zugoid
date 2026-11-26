@@ -7,6 +7,7 @@ import { getTask } from '../../utils/task-service'
 import { findAgentRun } from '../../utils/agent-run-service'
 import { requireChannelAccess } from '../../utils/guards'
 import { cf, fail } from '../../utils/cf'
+import { scheduleProposals } from '../../utils/schedule-proposals'
 
 export default defineEventHandler(async (event) => {
   setHeader(event, 'Cache-Control', 'private, no-store')
@@ -24,5 +25,6 @@ export default defineEventHandler(async (event) => {
   // What this Run asked to send out of its box, and how each request ended.
   const outward = await env.DB.prepare(`SELECT id,kind,status,json_extract(request_json,'$.sha') AS sha,COALESCE(json_extract(request_json,'$.title'),substr(json_extract(request_json,'$.summary'),1,160)) AS title,
     decided_at AS decidedAt,json_extract(result_json,'$.message') AS message,json_extract(result_json,'$.pull.url') AS pullUrl,created_at AS createdAt FROM factory_approvals WHERE run_id=? ORDER BY created_at DESC LIMIT 30`).bind(run.id).all()
-  return { agentName: agent?.displayName ?? null, task: task ? { id: task.id, number: task.number, title: task.title } : null, outward: outward.results, publicationHistory: await runPublicationHistory(env, run.id, actor.user.id), publication: await runPublication(env, run.id, actor.user.id), security: await runToolSecurity(env, run), delivery: await runDelivery(env, run.id), canRetry: actor.user.id === run.initiatedBy, modelCalls: modelCalls.results, events: events.results.map(row => ({ ...row, event: JSON.parse(row.event) })), run: { ...visible, hasFactory: Boolean(run.environmentJson && JSON.parse(run.environmentJson).computeNodeId), hasFiles: Boolean(run.filesKey) }, canCancel: actor.user.id === run.initiatedBy || actor.isOwner || hasPermission(actor.perms, Permission.manageAgents) }
+  const proposedSchedules = run.sourceMessageId ? await scheduleProposals(env, run) : []
+  return { proposedSchedules, agentName: agent?.displayName ?? null, task: task ? { id: task.id, number: task.number, title: task.title } : null, outward: outward.results, publicationHistory: await runPublicationHistory(env, run.id, actor.user.id), publication: await runPublication(env, run.id, actor.user.id), security: await runToolSecurity(env, run), delivery: await runDelivery(env, run.id), canRetry: actor.user.id === run.initiatedBy, modelCalls: modelCalls.results, events: events.results.map(row => ({ ...row, event: JSON.parse(row.event) })), run: { ...visible, hasFactory: Boolean(run.environmentJson && JSON.parse(run.environmentJson).computeNodeId), hasFiles: Boolean(run.filesKey) }, canCancel: actor.user.id === run.initiatedBy || actor.isOwner || hasPermission(actor.perms, Permission.manageAgents) }
 })

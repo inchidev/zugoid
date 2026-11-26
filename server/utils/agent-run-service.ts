@@ -9,7 +9,7 @@ import { resourceAccessAllows, resourceAccessWithin, RESOURCE_KINDS, type Resour
 import type { AuthorizationContext } from '../../shared/authorization'
 import { spaceAllowed, spaceSql } from '../../shared/spaces'
 import { spaceMembersOnly, spaceOfResource } from './space-access'
-import { intersectResources, runRequestSchema, RUN_QUEUE_WAIT_MS, type AgentRun, type RunMandate, type RunRequest } from '../../shared/agent-execution'
+import { intersectResources, runRequestSchema, RUN_QUEUE_WAIT_MS, type AgentRun, type RunMandate, type RunRequest, type ScheduledRunOrigin } from '../../shared/agent-execution'
 import type { ZugoidEnv } from '../../workers/env'
 import { asRpc, piRuntimeConfigured } from '../../workers/env'
 import { loadAuthorizationContext } from './authorization'
@@ -118,7 +118,7 @@ export async function runAuthorization(env: ZugoidEnv, run: Pick<AgentRun, 'id' 
   return auth
 }
 
-export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext, request: RunRequest, ceiling?: RunMandate): Promise<AgentRun> {
+export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext, request: RunRequest, ceiling?: RunMandate, scheduledOrigin?: ScheduledRunOrigin): Promise<AgentRun> {
   const { agentExecutionPolicy } = await import('./agent-execution-policy')
   const executionPolicy = await agentExecutionPolicy(env)
   const parsed = runRequestSchema.parse(request)
@@ -139,6 +139,7 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
   const pairDm = await env.DB.prepare("SELECT id FROM channels WHERE id=? AND type='dm' AND (SELECT count(*) FROM channel_members WHERE channel_id=channels.id)=2").bind(input.channelId).first()
   if (pairDm) fail(400, 'thread_required', 'Send a message to the agent to start a reply thread')
   const sameRequest = (run: AgentRun) => {
+    if (JSON.stringify((JSON.parse(run.mandateJson) as RunMandate).scheduledOrigin ?? null) !== JSON.stringify(scheduledOrigin ?? null)) fail(409, 'run_conflict', 'Request key was already used for different work')
     if (input.toolConnectionIds && JSON.stringify([...input.toolConnectionIds].sort()) !== JSON.stringify(((JSON.parse(run.mandateJson) as RunMandate).toolConnections ?? []).map(cap => cap.id).sort())) fail(409, 'call_conflict', 'Run connection selection changed')
     if (run.channelId !== input.channelId || run.prompt !== input.prompt || run.taskId !== (input.taskId ?? null)
       || run.sourceMessageId !== (input.sourceMessageId ?? null)
@@ -233,6 +234,13 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
     computer, execution: ceiling ? ceiling.execution : executionPolicy, rootRunId: ceiling?.rootRunId ?? id, parentRunId: ceiling?.parentRunId, rootDeadline: ceiling?.rootDeadline,
     maxSteps: executionPolicy.maxSteps, maxModelCalls: executionPolicy.maxModelCalls,
     maxToolCalls: executionPolicy.maxToolCalls, maxTokens: executionPolicy.maxTokens }
+  if (scheduledOrigin) {
+    mandate.scheduledOrigin = scheduledOrigin
+    const modes = ['role', 'plan', 'review'] as const
+    if (mandate.execution && modes.indexOf(executionPolicy.mode) > modes.indexOf(mandate.execution.mode)) {
+      mandate.execution = { ...mandate.execution, mode: executionPolicy.mode }
+    }
+  }
   if (!input.taskId && !ceiling) {
     const repositories = await env.DB.prepare(`SELECT r.id,r.environment_id AS environmentId,e.version FROM project_repositories r
       JOIN projects p ON p.id=r.project_id JOIN agent_environments e ON e.id=r.environment_id
@@ -268,6 +276,7 @@ export async function createAgentRun(env: ZugoidEnv, actor: AuthorizationContext
   }
   // The model never sees the chat UI, so the Run's instructions carry the Agent's name.
   const instructions = `You are ${profile.displayName}, an AI agent on this Server. ${profile.instructions}`.trim()
+    + (scheduledOrigin ? '\nFor this scheduled run, finish with a concise summary of what happened, within 2000 characters.' : '')
   // Counted after every refusal above, so only a Run that will start uses the Space's month.
   const runSpaceId = await spaceOfResource(env, 'channel', input.channelId)
   if (runSpaceId) await consumeSpaceQuota(env, runSpaceId, 'runs', 'Agent Runs')

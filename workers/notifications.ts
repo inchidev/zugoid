@@ -2,7 +2,7 @@ import { chatAlertRecipients } from './chat-alerts'
 import { filterLiveRecipients } from './live-audience'
 import type { LiveKind, PublicUser } from '../shared/types'
 import { liveNotificationTitle } from '../shared/live'
-import { channelPath, mailPath } from '../shared/paths'
+import { channelPath, mailPath, scheduleConversationPath } from '../shared/paths'
 import { Permission } from '../shared/permissions'
 import { notificationPreview, type NotificationKind, type PushNotificationPayload } from '../shared/notifications'
 import type { ZugoidEnv } from './env'
@@ -14,6 +14,7 @@ type ChannelRow = {
   type: string
   visibility: string
   parent_id: string | null
+  schedule_id: string | null
 }
 
 type NotificationSpec = {
@@ -39,7 +40,8 @@ type NotificationMessage = {
 
 async function channelAndRoot(env: ZugoidEnv, channelId: string): Promise<{ channel: ChannelRow; root: ChannelRow } | null> {
   const rows = await env.DB.prepare(
-    `SELECT id, name, type, visibility, parent_id FROM channels
+    `SELECT id, name, type, visibility, parent_id,
+      (SELECT id FROM agent_schedules WHERE discussion_channel_id=channels.id LIMIT 1) AS schedule_id FROM channels
      WHERE id = ?1 OR id = (SELECT parent_id FROM channels WHERE id = ?1 AND type IN ('thread', 'conversation'))`,
   ).bind(channelId).all<ChannelRow>()
   const channel = rows.results?.find(row => row.id === channelId)
@@ -158,8 +160,9 @@ export async function messageNotificationStatement(env: ZugoidEnv, message: Noti
     dm, mentioned, candidates, edit: message.edit })
   if (!recipientIds.length) return null
   const kind: NotificationKind = dm ? 'dm_message' : 'mention'
-  const title = dm ? message.author.displayName : `${message.author.displayName} in #${root.name}`
-  const url = channel.type === 'thread' ? channelPath(root.id, channel.id) : channelPath(channel.id)
+  const title = channel.schedule_id ? 'Scheduled work' : dm ? message.author.displayName : `${message.author.displayName} in #${root.name}`
+  const url = channel.schedule_id ? scheduleConversationPath(channel.schedule_id)
+    : channel.type === 'thread' ? channelPath(root.id, channel.id) : channelPath(channel.id)
   return outboxStatement(env, {
     eventId: `message:${message.id}`,
     kind,
@@ -190,7 +193,8 @@ export async function reminderNotificationStatement(env: ZugoidEnv, message: Not
       title: root.type === 'dm' ? 'Reminder' : `Reminder in #${root.name}`,
       body: notificationPreview(message.content, message.attachmentCount),
       tag: `message:${message.id}`,
-      url: channel.type === 'thread' ? channelPath(root.id, channel.id) : channelPath(channel.id),
+      url: channel.schedule_id ? scheduleConversationPath(channel.schedule_id)
+        : channel.type === 'thread' ? channelPath(root.id, channel.id) : channelPath(channel.id),
       icon: '/android-chrome-192x192.png',
       badge: '/favicon-32x32.png',
     },

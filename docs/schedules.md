@@ -59,6 +59,8 @@ Resume re-runs the delivery checks first, so it fails with the same reason until
 
 History shows the last occurrences with links to the delivered message or the started Run. Each Schedule keeps its latest 100 finished occurrences.
 
+New work Schedules have one discussion that inherits access from the chosen conversation. Each Run uses that discussion for delivery. When it starts, the Agent posts a short notice in the chosen conversation. Run details remain private to the initiating Member. Members can use the existing Run publication review to share a private result with the discussion.
+
 ## API
 
 All routes need a signed-in Member with `manageSchedules`. Errors use `{ error: { code, message } }`.
@@ -77,6 +79,8 @@ A Schedule's `lastError` and `lastErrorCode` hold the latest failure. `unavailab
 ## Agent tools
 
 Within a Run in a conversation, an Agent with `manageSchedules` (subject to tool review) can use:
+
+- `prepare_work_schedule` `{ content, firstAt, timezone, recurrence, taskId? }`: prepares work for the same Agent and conversation. The initiating Member reviews and confirms the completed proposal from the Run. The approval endpoint rechecks the current permissions and uses the proposal ID to deduplicate confirmation. Repository work uses its assigned Task.
 
 - `create_reminder` `{ content, firstAt, timezone, recurrence }`: a reminder in the Run's conversation. Confirm ambiguous times with the person first; `get_current_time` gives the Server time and timezone.
 - `update_reminder` `{ scheduleId, content?, firstAt?, timezone?, recurrence? }`: edit a reminder the Agent created in the Run's conversation, under the same rules as an edit.

@@ -522,7 +522,6 @@ export const channels = sqliteTable('channels', {
     or (${table.type} = 'conversation' and ${table.parentId} is not null and ${table.parentMessageId} is null)
     or (${table.type} not in ('thread', 'conversation') and ${table.parentId} is null and ${table.parentMessageId} is null)
   `),
-  check('channels_conversation_section_check', sql`${table.type} <> 'conversation' or ${table.section} = 'customers'`),
   index('channels_space_idx').on(table.spaceId),
 ])
 
@@ -1764,6 +1763,7 @@ export const agentSchedules = sqliteTable('agent_schedules', {
   principalId: text('principal_id').notNull().references(() => users.id),
   createdBy: text('created_by').notNull().references(() => users.id),
   channelId: text('channel_id').notNull().references(() => channels.id),
+  discussionChannelId: text('discussion_channel_id').references(() => channels.id, { onDelete: 'set null' }),
   kind: text('kind').notNull(),
   content: text('content').notNull(),
   agentId: text('agent_id').references(() => agents.userId),
@@ -1783,6 +1783,7 @@ export const agentSchedules = sqliteTable('agent_schedules', {
 }, table => [
   index('agent_schedules_created_by_status_idx').on(table.createdBy, table.status, table.nextAt),
   index('agent_schedules_principal_status_idx').on(table.principalId, table.status, table.nextAt),
+  uniqueIndex('agent_schedules_discussion_channel_idx').on(table.discussionChannelId),
 ])
 
 export const agentScheduleOccurrences = sqliteTable('agent_schedule_occurrences', {
