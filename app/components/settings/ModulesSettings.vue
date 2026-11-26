@@ -21,10 +21,11 @@ const saving = ref(false)
 
 const MODULES: Array<{ id: HideableSection; label: string; description: string }> = [
   { id: 'inbox', label: 'Inbox', description: 'Everything that needs you, in one list.' },
+  { id: 'schedules', label: 'Scheduled', description: 'Reminders and recurring work.' },
   { id: 'tasks', label: 'Tasks', description: 'Boards and Tasks.' },
   { id: 'factory', label: 'Factory', description: 'Projects, repositories, Runs, Git and compute.' },
   { id: 'customers', label: 'Customers', description: 'Customer Conversations: the chat Widget, Telegram bots and Mail.' },
-  { id: 'agents', label: 'Agents', description: 'Agents, their Runs and Schedules.' },
+  { id: 'agents', label: 'Agents', description: 'Agents, their conversations and Runs.' },
   { id: 'data', label: 'Data', description: 'Databases, items and Data sources.' },
   { id: 'media', label: 'Media', description: 'The photo and video library.' },
 ]

@@ -1,5 +1,5 @@
 import { pausedSections } from '~~/shared/features'
-import { serverNavigationModule, serverNavigationSection } from '~~/shared/server-navigation'
+import { serverNavigationSection } from '~~/shared/server-navigation'
 
 /**
  * Paused areas and modules this Server hides (Server settings → Modules) keep their data. Old links and bookmarks
@@ -8,7 +8,6 @@ import { serverNavigationModule, serverNavigationSection } from '~~/shared/serve
 export default defineNuxtRouteMiddleware((to) => {
   const section = serverNavigationSection(to.path)
   if (!section) return
-  const module = serverNavigationModule(section)
   const hidden = useSessionStore().health?.theme?.hiddenSections as readonly string[] | undefined
-  if (pausedSections.has(module) || hidden?.includes(module)) return navigateTo('/', { replace: true })
+  if (pausedSections.has(section) || hidden?.includes(section)) return navigateTo('/', { replace: true })
 })

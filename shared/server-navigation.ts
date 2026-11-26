@@ -1,7 +1,6 @@
 import { channelPath, type ChannelRef } from './paths'
 
 export type ServerNavigationSection = 'chat' | 'inbox' | 'schedules' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'gadgets'
-type ServerNavigationModule = Exclude<ServerNavigationSection, 'schedules'>
 
 /** The Chat rail must not reopen an Agent DM remembered by an older Client. */
 export function chatNavigationTarget(conversations: readonly ChannelRef[], lastId?: string): string {
@@ -32,26 +31,22 @@ export function hasServerNavigationMenu(path: string): boolean {
   return section !== null && section !== 'schedules'
 }
 
-/** Scheduled has its own page in the rail and shares the Agents module switch. */
-export function serverNavigationModule(section: ServerNavigationSection): ServerNavigationModule {
-  return section === 'schedules' ? 'agents' : section
-}
-
 /** The API paths of each section, for the Server's module switches: a section left out answers 404. */
-const API_MODULE_SEGMENTS: Record<string, ServerNavigationModule> = {
+const API_MODULE_SEGMENTS: Record<string, ServerNavigationSection> = {
   inbox: 'inbox',
+  schedules: 'schedules',
   tasks: 'tasks', 'task-attachments': 'tasks', 'task-checklist': 'tasks', 'task-files': 'tasks', boards: 'tasks',
   projects: 'factory', runs: 'factory', factory: 'factory', 'code-environments': 'factory', 'git-connections': 'factory',
   'compute-nodes': 'factory', 'compute-agent': 'factory',
   customers: 'customers', mail: 'customers',
-  agents: 'agents', 'agent-runs': 'agents', schedules: 'agents', 'agent-auth': 'agents',
+  agents: 'agents', 'agent-runs': 'agents', 'agent-auth': 'agents',
   media: 'media',
   databases: 'data', 'database-fields': 'data', 'database-views': 'data', items: 'data',
   gadgets: 'gadgets',
 }
 
 /** The section an `/api/...` path belongs to, or null for the Server's own paths, which stay. */
-export function apiModuleSection(path: string): ServerNavigationModule | null {
+export function apiModuleSection(path: string): ServerNavigationSection | null {
   if (!path.startsWith('/api/')) return null
   const segment = path.split('/')[2] ?? ''
   if (segment.startsWith('data')) return 'data'

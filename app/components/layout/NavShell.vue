@@ -7,7 +7,7 @@ import type { ChannelCategoryDTO as Category, ChannelDTO as Ch, MailboxDTO, Serv
 import { Permission } from '~~/shared/permissions'
 import { BOARD_ROUTE, channelPath, mailPath } from '~~/shared/paths'
 import { useClipboard } from '@vueuse/core'
-import { chatNavigationTarget, hasServerNavigationMenu, serverNavigationModule, serverNavigationSection } from '~~/shared/server-navigation'
+import { chatNavigationTarget, hasServerNavigationMenu, serverNavigationSection } from '~~/shared/server-navigation'
 import { publicIconPath } from '~~/shared/server-appearance'
 import { pausedSections } from '~~/shared/features'
 
@@ -88,8 +88,8 @@ const views = computed(() => [
   { label: 'Media', icon: 'i-ph-images', to: '/media', path: '/media', count: 0, dot: false },
   ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
 ].filter((view) => {
-  const module = serverNavigationModule(serverNavigationSection(view.path)!)
-  return !pausedSections.has(module) && !hiddenSections.value.has(module)
+  const section = serverNavigationSection(view.path)!
+  return !pausedSections.has(section) && !hiddenSections.value.has(section)
 }))
 function isViewActive(path: string) {
   return section.value === serverNavigationSection(path)
