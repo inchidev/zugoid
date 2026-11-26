@@ -1,11 +1,10 @@
 import { z } from 'zod'
-import { authorize, ServerAction } from '../../../../shared/authorization'
 import { Permission } from '../../../../shared/permissions'
 import { findAgentRun, runAuthorization } from '../../../utils/agent-run-service'
 import { requireRunReader } from '../../../utils/agent-tool-security'
 import { cf, fail } from '../../../utils/cf'
 import { requireChannelAccess } from '../../../utils/guards'
-import { scheduleProposals } from '../../../utils/schedule-proposals'
+import { canProposeWorkSchedule, scheduleProposals } from '../../../utils/schedule-proposals'
 import { createSchedule } from '../../../utils/schedule-service'
 import { parseBody } from '../../../utils/validate'
 
@@ -23,6 +22,6 @@ export default defineEventHandler(async event => {
   if (!proposal || proposal.input.channelId !== run.channelId || proposal.input.agentId !== run.agentId || proposal.input.kind !== 'work') {
     fail(404, 'not_found', 'Schedule proposal not found')
   }
-  authorize(await runAuthorization(env, run), ServerAction.manageSchedules)
+  if (!canProposeWorkSchedule(await runAuthorization(env, run))) fail(403, 'schedule_denied', 'Manage schedules is required to confirm this proposal')
   return { schedule: await createSchedule(env, actor.authorization, proposal.input, proposal.id) }
 })

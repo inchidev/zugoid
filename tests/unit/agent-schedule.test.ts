@@ -148,7 +148,7 @@ it('keeps two occurrences in one chat and inherits the source audience', async (
 
 it('confirms one schedule per proposal without requiring a Task', async () => {
   await insertWork()
-  const permissions = Permission.manageSchedules | Permission.sendMessages | Permission.useAgents | Permission.executeTasks
+  const permissions = Permission.manageSchedules | Permission.sendMessages | Permission.useAgents
   db.prepare("UPDATE roles SET permissions_bitmask=? WHERE id='scheduler'").run(permissions)
   vi.mocked(piConfigured).mockResolvedValue(true)
   const member = (await actor())!

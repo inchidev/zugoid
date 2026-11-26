@@ -53,7 +53,7 @@ export const TOOL_RULES: Readonly<Record<string, ToolRule>> = {
   read_url: { actions: [A.browseWeb] }, search_web: { actions: [A.browseWeb] },
   // Schedules.
   create_reminder: { actions: [A.manageSchedules] }, update_reminder: { actions: [A.manageSchedules] },
-  prepare_work_schedule: { actions: [A.manageSchedules] },
+  prepare_work_schedule: { principal: 'agent' },
   list_schedules: { actions: [A.manageSchedules] }, cancel_schedule: { actions: [A.manageSchedules] },
   // Repositories admitted to a chat Run: the service checks Read projects and Use a computer in the Project.
   list_public_project_repositories: {}, inspect_public_project_repository: {},

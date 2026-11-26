@@ -1,6 +1,16 @@
 import type { AgentRun } from '../../shared/agent-execution'
+import { ServerAction, type AuthorizationContext } from '../../shared/authorization'
+import { hasPermission, Permission } from '../../shared/permissions'
 import { scheduleProposalSchema, type ScheduleProposal } from '../../shared/schedules'
 import type { ZugoidEnv } from '../../workers/env'
+
+/** Drafting a receipt never starts work. The person who can confirm it governs tool visibility. */
+export function canProposeWorkSchedule(auth: AuthorizationContext): boolean {
+  const delegation = auth.delegation
+  return Boolean(auth.principal.kind === 'agent' && delegation
+    && (delegation.isOwner || hasPermission(delegation.permissions ?? 0, Permission.manageSchedules))
+    && (!delegation.actions || delegation.actions.includes(ServerAction.manageSchedules)))
+}
 
 /** A completed tool receipt is the immutable proposal the person sees and approves. */
 export async function scheduleProposals(env: ZugoidEnv, run: Pick<AgentRun, 'id' | 'status'>): Promise<ScheduleProposal[]> {
