@@ -411,6 +411,16 @@ export class AgentRunDurableObject extends DurableObject<ZugoidEnv> {
       const files = fileStorage(this.env)
       if (!files) throw new Error('Pi file storage unavailable')
       const mandate = JSON.parse(run.mandateJson) as RunMandate
+      const origin = mandate.scheduledOrigin
+      if (origin && !await this.ctx.storage.get('schedule-start-notified')) {
+        try {
+          const channel = asRpc<{ postAgentMessage: (input: { agentId: string; content: string; sourceScheduleRunId: string }) => Promise<unknown> }>(this.env.CHANNEL_DO.getByName(`channel:${origin.channelId}`))
+          await channel.postAgentMessage({ agentId: run.agentId, content: 'Scheduled run started.', sourceScheduleRunId: run.id })
+          await this.ctx.storage.put('schedule-start-notified', true)
+        } catch (error) {
+          console.warn('agent.run.schedule_notification', { runId: run.id, errorType: error instanceof Error ? error.name : 'Unknown' })
+        }
+      }
       // A box is not the legacy container executor, even on a Server that also has one.
       if (mandate.computer && (this.env.AGENT_COMPUTE || this.env.AGENT_RUNNER_URL)
         && await this.ctx.storage.get<boolean>('box') !== true

@@ -28,6 +28,9 @@ describe(`migration ${files.at(-1)}`, () => {
       fillDatabase(db, fresh)
       expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
       const before = contents(db)
+      if (files.at(-1) === '0003_scheduled_conversations.sql') {
+        before.agent_schedules = before.agent_schedules.map(row => ({ ...row, discussion_channel_id: null }))
+      }
       expect(Object.values(before).filter(rows => rows.length).length).toBeGreaterThan(100)
 
       db.exec('BEGIN')

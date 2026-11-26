@@ -3,6 +3,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/vue-query'
 import type { ChannelDTO, TaskAgentDTO, TaskBoardDTO } from '~~/shared/types'
 import { formatScheduleTime, relativeScheduleTime, resolveScheduleTime, scheduleEditable, scheduleErrorHint, scheduleLocalTime, type PublicSchedule, type ScheduleListPage, type ScheduleStatusFilter } from '~~/shared/schedules'
 import { Permission } from '~~/shared/permissions'
+import { scheduleConversationPath } from '~~/shared/paths'
 
 definePageMeta({ layout: 'server', middleware: ['auth'] })
 const { api } = useApi()
@@ -10,6 +11,8 @@ const { serverId } = useServer()
 const { can } = useRoleGrants()
 const toast = useToast()
 const session = useSessionStore()
+const route = useRoute()
+const openSchedule = computed(() => typeof route.query.schedule === 'string' ? route.query.schedule : '')
 const busy = ref(false)
 const content = ref('')
 const channelId = ref('')
@@ -101,7 +104,8 @@ const history = ref<string | null>(null)
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 min-w-0 flex-col">
+  <SchedulesDiscussion v-if="openSchedule" :key="openSchedule" :schedule-id="openSchedule" />
+  <div v-else class="flex h-full min-h-0 min-w-0 flex-col">
     <LayoutPageHeader title="Scheduled" icon="i-ph-clock" />
     <main class="mx-auto w-full max-w-3xl flex-1 space-y-6 overflow-auto p-4 sm:p-8">
     <h2 class="text-lg font-medium">Reminders and recurring work</h2>
@@ -151,6 +155,7 @@ const history = ref<string | null>(null)
         </p>
         <UAlert v-if="item.lastError" :title="item.lastError" :description="scheduleErrorHint(item.lastErrorCode) ?? undefined" :color="item.status === 'blocked' ? 'error' : 'warning'" variant="subtle" />
         <div class="flex flex-wrap gap-1">
+          <UButton v-if="item.discussionChannelId" label="Open chat" icon="i-ph-chat" :to="scheduleConversationPath(item.id)" color="neutral" variant="ghost" size="sm" />
           <UButton v-if="canEdit(item)" label="Edit" color="neutral" variant="ghost" size="sm" @click="startEdit(item)" />
           <UButton v-if="item.status === 'active'" label="Pause" color="neutral" variant="ghost" size="sm" @click="act(item, 'pause')" />
           <UButton v-if="item.status === 'paused' || item.status === 'blocked'" label="Resume" color="neutral" variant="ghost" size="sm" @click="act(item, 'resume')" />

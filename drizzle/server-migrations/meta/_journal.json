@@ -22,6 +22,13 @@
       "when": 1795176773841,
       "tag": "0002_media",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795686139462,
+      "tag": "0003_scheduled_conversations",
+      "breakpoints": true
     }
   ]
 }

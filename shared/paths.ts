@@ -5,6 +5,8 @@ export type ChannelRef = {
   participants?: readonly { kind?: string }[]
 }
 
+export const scheduleConversationPath = (scheduleId: string) => `/schedules?schedule=${encodeURIComponent(scheduleId)}`
+
 export function channelPath(channel: string | ChannelRef, threadId?: string): string {
   const id = typeof channel === 'string' ? channel : channel.id
   const section = typeof channel !== 'string' && channel.type === 'dm' && channel.participants?.some(member => member.kind === 'agent')

@@ -19,8 +19,10 @@ export type RunRequest = z.infer<typeof runRequestSchema>
 export const RUN_EXECUTION_MS = 15 * 60_000
 export const RUN_QUEUE_WAIT_MS = 24 * 60 * 60_000
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type ScheduledRunOrigin = { scheduleId: string; channelId: string; messageId: string }
 export type RunMandate = {
   execution?: AgentExecutionPolicy
+  scheduledOrigin?: ScheduledRunOrigin
   rootRunId?: string
   parentRunId?: string
   rootDeadline?: string
