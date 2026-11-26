@@ -10,6 +10,7 @@ const emit = defineEmits<{ saved: []; closed: [] }>()
 const { api } = useApi()
 const { serverId } = useServer()
 const { can } = useRoleGrants()
+const isMobile = useIsMobile()
 const formId = useId()
 const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone
 const timezones = [...new Set([browserZone, 'UTC', ...((Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? [])])].sort()
@@ -111,7 +112,14 @@ async function save() {
     :title="schedule ? 'Edit schedule' : 'New schedule'"
     :dismissible="!saving"
     :close="!saving"
-    :ui="{ content: 'max-w-xl' }"
+    :fullscreen="isMobile"
+    :ui="{
+      content: 'md:max-w-xl',
+      header: 'shrink-0 max-md:pt-[calc(1rem+var(--df-safe-area-top))]',
+      close: 'max-md:top-[calc(1rem+var(--df-safe-area-top))]',
+      body: 'min-h-0',
+      footer: 'shrink-0 max-md:pb-[calc(1rem+var(--df-safe-area-bottom))]',
+    }"
     @after:leave="emit('closed')"
   >
     <template #body>
