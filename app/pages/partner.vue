@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { partnerDestination } from '~~/shared/partner-destination'
 /**
  * Where a partner's app sends its people: `/partner#ticket=…`. The ticket stays in the fragment, so it never reaches
  * a log or a Referer; it is spent once and the person lands in the Server signed in.
@@ -10,7 +11,9 @@ const { api } = useApi()
 const error = ref<string | null>(null)
 
 onMounted(async () => {
-  const ticket = new URLSearchParams(window.location.hash.slice(1)).get('ticket') || ''
+  const params = new URLSearchParams(window.location.hash.slice(1))
+  const ticket = params.get('ticket') || ''
+  const next = partnerDestination(params.get('next'))
   window.history.replaceState({}, '', window.location.pathname)
   if (!ticket) {
     error.value = 'This link is incomplete. Open the server again from the app.'
@@ -19,7 +22,7 @@ onMounted(async () => {
   try {
     await api('/api/auth/partner/sign-in', { method: 'POST', body: { ticket } })
     await session.refresh(api)
-    await navigateTo(session.user?.onboardingRequired ? '/signup/accept' : '/')
+    await navigateTo(session.user?.onboardingRequired ? { path: '/signup/accept', query: { next } } : next, { replace: true })
   }
   catch (err) {
     error.value = errorMessage(err)
