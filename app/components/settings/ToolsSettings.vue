@@ -2,7 +2,7 @@
 import SettingsEditor from './SettingsEditor.vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { Permission } from '~~/shared/permissions'
-import { CUSTOM_MCP_PROVIDER, mcpEndpointProblem, outboundMcpProviders, type McpConnectionDTO, type McpConnectionInput } from '~~/shared/outbound-mcp'
+import { CUSTOM_MCP_PROVIDER, mcpEndpointProblem, outboundMcpProviders, reviewedMcpTools, UNOT_DRAFT_PROVIDER, type McpConnectionDTO, type McpConnectionInput } from '~~/shared/outbound-mcp'
 import type { ToolsSettingsDTO, ToolAuditPage } from '~~/shared/agent-tools-settings'
 const props=defineProps<{serverId:string}>()
 const emit=defineEmits<{roles:[]}>()
@@ -13,7 +13,7 @@ const tab=ref('installed'), selectedAgent=ref<string>(), search=ref(''), auditSe
 const tabs=[{label:'Installed',value:'installed'},{label:'Discover / Connect',value:'connect'},{label:'Permissions',value:'permissions'},{label:'Approvals',value:'approvals'},{label:'Audit',value:'audit'}]
 const settingsQ=useQuery({queryKey:computed(()=>['tool-settings',props.serverId,selectedAgent.value]),queryFn:()=>api<ToolsSettingsDTO>(root.value+'/tools'+(selectedAgent.value?'?agentId='+encodeURIComponent(selectedAgent.value):'')),refetchInterval:15000})
 const settings=computed(()=>settingsQ.data.value)
-const connectionsQ=useQuery({queryKey:computed(()=>['tool-connections',props.serverId]),queryFn:()=>api<{connections:McpConnectionDTO[]}>(root.value+'/tool-connections'),enabled:computed(()=>Boolean(settings.value?.mayConnect)),refetchInterval:15000})
+const connectionsQ=useQuery({queryKey:computed(()=>['tool-connections',props.serverId]),queryFn:()=>api<{connections:McpConnectionDTO[];providers:Array<typeof outboundMcpProviders[number]>}>(root.value+'/tool-connections'),enabled:computed(()=>Boolean(settings.value?.mayConnect)),refetchInterval:15000})
 const auditQ=useQuery({queryKey:computed(()=>['tool-audit',props.serverId,auditSearch.value,page.value]),queryFn:()=>api<ToolAuditPage>(root.value+'/tool-audit?search='+encodeURIComponent(auditSearch.value)+'&page='+page.value),enabled:computed(()=>tab.value==='audit'&&Boolean(settings.value?.mayAudit))})
 watch(auditSearch,()=>{page.value=1})
 const agentOptions=computed(()=>(settings.value?.agents??[]).map(a=>({label:a.name+(a.status==='active'?'':' (paused)'),value:a.id})))
@@ -31,12 +31,20 @@ const fresh=():McpConnectionInput=>({name:'',providerId:'cloudflare-docs',endpoi
 const form=reactive(fresh())
 const credential=ref(''), credentialAction=ref('keep'), expiry=ref(''), accessId=ref(''), accessSecret=ref('')
 const custom=computed(()=>form.providerId===CUSTOM_MCP_PROVIDER)
+const unotDrafts=computed(()=>form.providerId===UNOT_DRAFT_PROVIDER)
 const provider=computed(()=>outboundMcpProviders.find(p=>p.id===form.providerId))
 const endpointProblem=computed(()=>custom.value&&form.endpoint?mcpEndpointProblem(form.endpoint,window.location.origin):null)
 const discovered=computed(()=>connections.value.find(c=>c.id===editing.value)?.tools??[])
 const credentialOptions=computed(()=>[{label:connections.value.find(c=>c.id===editing.value)?.hasCredential?'Keep saved credential':'No credential',value:'keep'},{label:'Set or replace bearer token',value:'replace'},...(custom.value?[{label:'Set Cloudflare Access service token',value:'access'},{label:'Set X-API-Key',value:'apikey'}]:[]),{label:'Remove credential',value:'remove'}])
-const sources=computed(()=>[...(settings.value?.mayManageServer?[{id:CUSTOM_MCP_PROVIDER as McpConnectionInput['providerId'],name:'Custom MCP server',endpoint:'Your own HTTPS URL, such as Coolify or DBHub'}]:[]),...outboundMcpProviders])
-watch(()=>form.providerId,()=>{if(!editing.value)form.toolNames=provider.value?[provider.value.readTools[0]]:[]})
+const sources=computed(()=>[...(settings.value?.mayManageServer?[{id:CUSTOM_MCP_PROVIDER as McpConnectionInput['providerId'],name:'Custom MCP server',endpoint:'Your own HTTPS URL, such as Coolify or DBHub'}]:[]),...(connectionsQ.data.value?.providers??outboundMcpProviders.filter(p=>p.id!==UNOT_DRAFT_PROVIDER))])
+watch(()=>form.providerId,()=>{
+  if (editing.value) return
+  form.toolNames=provider.value?[provider.value.readTools[0]]:[]
+  if (unotDrafts.value) {
+    form.ownership='member'
+    credentialAction.value='replace'
+  }
+})
 watch(()=>form.ownership,value=>{if(value==='member'){form.grants.memberIds=[];form.grants.roleIds=[]}})
 function openEditor(connection?:McpConnectionDTO, providerId?:McpConnectionInput['providerId']) {
   editing.value=connection?.id??null
@@ -144,14 +152,14 @@ async function remove(){const c=removeTarget.value;if(!c)return;await action(c.i
           <UFormField label="What it holds" help="Agents read this to decide when to use the connection."><UInput v-model="form.description" aria-label="What this connection holds" maxlength="300" placeholder="Customers, subscriptions and payments" class="w-full" /></UFormField>
           <UAlert color="warning" title="Agents use this connection with one shared credential" description="Everyone you allow sees what that credential sees, so make it read-only and narrow. An answer appears where the question was asked, for everyone in that conversation. Agents may also send Server data to this service in their requests. For DBHub, turn on its readonly setting." />
         </template>
-        <UFormField v-if="!custom" label="Ownership"><USelect v-model="form.ownership" :items="settings?.mayManageServer?[{label:'Server-owned',value:'server'},{label:'Personal',value:'member'}]:[{label:'Personal',value:'member'}]" value-key="value" :disabled="Boolean(editing)" aria-label="Connection ownership" class="w-full" /></UFormField>
+        <UFormField v-if="!custom && !unotDrafts" label="Ownership"><USelect v-model="form.ownership" :items="settings?.mayManageServer?[{label:'Server-owned',value:'server'},{label:'Personal',value:'member'}]:[{label:'Personal',value:'member'}]" value-key="value" :disabled="Boolean(editing)" aria-label="Connection ownership" class="w-full" /></UFormField>
         <p class="text-sm text-muted">{{ form.ownership==='member'?'Only you can manage this connection. You must initiate its Runs; only explicitly selected Agents can use it.':'Select Agent and initiator grants. A selected Role can grant either side; both sides still need Use external tools.' }}</p>
         <UFormField label="Allowed Agents"><USelectMenu v-model="form.grants.agentIds" :items="agentOptions" value-key="value" multiple aria-label="Allowed Agents" class="w-full" /></UFormField>
         <template v-if="form.ownership==='server'">
           <UFormField label="Allowed initiating Members"><USelectMenu v-model="form.grants.memberIds" :items="memberOptions" value-key="value" multiple aria-label="Allowed initiating Members" class="w-full" /></UFormField>
           <UFormField label="Allowed Roles"><USelectMenu v-model="form.grants.roleIds" :items="roleOptions" value-key="value" multiple aria-label="Allowed Roles" class="w-full" /></UFormField>
         </template>
-        <fieldset v-if="provider" class="space-y-2"><legend class="mb-2 text-sm font-medium">Reviewed read-only tools</legend><UCheckbox v-for="name in provider.readTools" :key="name" :model-value="form.toolNames.includes(name)" :label="name" @update:model-value="value=>{form.toolNames=value?[...form.toolNames,name]:form.toolNames.filter(t=>t!==name)}" /></fieldset>
+        <fieldset v-if="provider" class="space-y-2"><legend class="mb-2 text-sm font-medium">{{ unotDrafts ? 'Unot draft permissions' : 'Reviewed read-only tools' }}</legend><UCheckbox v-for="name in reviewedMcpTools(provider)" :key="name" :model-value="form.toolNames.includes(name)" :label="name" @update:model-value="value=>{form.toolNames=value?[...form.toolNames,name]:form.toolNames.filter(t=>t!==name)}" /></fieldset>
         <fieldset v-else-if="discovered.length" class="space-y-2"><legend class="mb-2 text-sm font-medium">Tools Agents may use</legend><UCheckbox v-for="tool in discovered" :key="tool.name" :model-value="form.toolNames.includes(tool.remoteName)" :label="tool.remoteName" :description="tool.declaredReadOnly?'The service says this only reads.':'The service does not say whether this only reads. Choose it only if the credential cannot change anything.'" @update:model-value="value=>{form.toolNames=value?[...form.toolNames,tool.remoteName]:form.toolNames.filter(t=>t!==tool.remoteName)}" /></fieldset>
         <p v-if="custom && hiddenTools.length" class="text-sm text-warning">Not available, because they can change data: {{ hiddenTools.join(', ') }}.</p>
         <p v-else-if="custom && !discovered.length" class="text-sm text-muted">Save to connect. Zugoid then lists the tools this URL offers and you choose which ones Agents may use.</p>

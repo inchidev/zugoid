@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+export const UNOT_DRAFT_PROVIDER = 'unot-dev-games'
+export const unotDraftWrites: readonly string[] = ['save_draft', 'playtest_draft']
+export function unotDraftOrigin(origin: string | undefined) {
+  if (!origin) return false
+  try {
+    const url = new URL(origin)
+    return url.origin === origin && url.protocol === 'https:' && !url.port
+      && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-studio-dev\.unot\.app$/u.test(url.hostname)
+  } catch { return false }
+}
+
 /** Reviewed origins and operations, not instructions or hints supplied by an MCP server. */
 export const outboundMcpProviders = [{
   id: 'cloudflare-docs', name: 'Cloudflare documentation', endpoint: 'https://docs.mcp.cloudflare.com/mcp',
@@ -7,7 +18,14 @@ export const outboundMcpProviders = [{
 }, {
   id: 'deepwiki', name: 'DeepWiki public documentation', endpoint: 'https://mcp.deepwiki.com/mcp',
   readTools: ['read_wiki_structure', 'read_wiki_contents'],
+}, {
+  id: UNOT_DRAFT_PROVIDER, name: 'Unot dev game drafts', endpoint: 'https://dev.unot.app/mcp/games',
+  readTools: ['read_draft', 'game_sdk'],
 }] as const
+
+export function reviewedMcpTools(provider: typeof outboundMcpProviders[number]): readonly string[] {
+  return provider.id === UNOT_DRAFT_PROVIDER ? [...provider.readTools, ...unotDraftWrites] : provider.readTools
+}
 
 /** A connection whose URL the Server Owner entered. Its results are private to the Server. */
 export const CUSTOM_MCP_PROVIDER = 'custom'
@@ -39,7 +57,7 @@ const secretHeader = z.object({
   value: z.string().min(1).max(4096).regex(/^[\x21-\x7e]+$/u),
 }).strict()
 export const mcpConnectionInput = z.object({
-  name: z.string().trim().min(1).max(60), providerId: z.enum(['cloudflare-docs', 'deepwiki', CUSTOM_MCP_PROVIDER]),
+  name: z.string().trim().min(1).max(60), providerId: z.enum(['cloudflare-docs', 'deepwiki', CUSTOM_MCP_PROVIDER, UNOT_DRAFT_PROVIDER]),
   endpoint: z.string().trim().max(2048).optional(), description: z.string().trim().max(300).default(''),
   ownership: z.enum(['server', 'member']), enabled: z.boolean().default(false),
   grants: z.object({ agentIds: ids, memberIds: ids, roleIds: ids }).strict(),

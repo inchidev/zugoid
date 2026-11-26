@@ -1,6 +1,6 @@
 import { AGENT_ANSWER_MAX, type AgentRun, type RunMandate } from '../../shared/agent-execution'
 import { autonomousExecution, type AgentExecutionMode } from '../../shared/agent-execution-policy'
-import { CUSTOM_MCP_PROVIDER } from '../../shared/outbound-mcp'
+import { CUSTOM_MCP_PROVIDER, UNOT_DRAFT_PROVIDER } from '../../shared/outbound-mcp'
 import type { ZugoidEnv } from '../../workers/env'
 import { compatibleRunHistory } from './agent-context'
 import { fail } from './cf'
@@ -69,12 +69,11 @@ export async function privateContext(env: ZugoidEnv, run: AgentRun): Promise<boo
   const { where, value } = await runLineage(env, run)
   return Boolean(await env.DB.prepare(`SELECT 1 AS found FROM agent_runs r WHERE ${where} AND r.private_at IS NOT NULL LIMIT 1`).bind(value).first())
 }
-/** A custom connection is a source the Owner trusts with this Server's data; a reviewed public one is not. */
-async function customConnectionTool(env: ZugoidEnv, name: string): Promise<boolean> {
-  if (!name.startsWith('mcp_')) return false
-  const row = await env.DB.prepare("SELECT 1 AS found FROM mcp_outbound_connections WHERE replace(id,'-','')=? AND provider_id=?")
-    .bind(name.slice(4, 36), CUSTOM_MCP_PROVIDER).first()
-  return Boolean(row)
+async function connectionProvider(env: ZugoidEnv, name: string): Promise<string | null> {
+  if (!name.startsWith('mcp_')) return null
+  const row = await env.DB.prepare("SELECT provider_id AS id FROM mcp_outbound_connections WHERE replace(id,'-','')=?")
+    .bind(name.slice(4, 36)).first<{ id: string }>()
+  return row?.id ?? null
 }
 export function toolSecurityReason(name: string, untrusted: boolean, mode: AgentExecutionMode = 'review', privateData = false): string | null {
   const effect = toolEffect(name)
@@ -93,15 +92,19 @@ export async function guardRunTool(env: ZugoidEnv, run: AgentRun, name: string, 
   const untrusted = await untrustedContext(env, run)
   const mandate = JSON.parse(run.mandateJson) as RunMandate
   const role = autonomousExecution(mandate.execution?.mode)
-  const custom = await customConnectionTool(env, name)
-  const reason = toolSecurityReason(name, untrusted, mandate.execution?.mode, role && arbitraryEgress(name) && !custom && await privateContext(env, run))
+  const provider = await connectionProvider(env, name)
+  const custom = provider === CUSTOM_MCP_PROVIDER
+  const unot = provider === UNOT_DRAFT_PROVIDER
+  const unotRestricted = unot && ((mandate.toolConnections?.length ?? 0) !== 1 || await readPrivateSource(env, run))
+  const reason = toolSecurityReason(name, untrusted, mandate.execution?.mode, role && arbitraryEgress(name)
+    && (unot ? unotRestricted : !custom && await privateContext(env, run)))
   // Mark before starting any read: concurrent calls, failed reads and process death cannot clear taint.
   if (!reason && (effect === 'read' || effect === 'external')) await markUntrustedContext(env, run)
-  if (!reason && custom) await env.DB.prepare('UPDATE agent_runs SET private_at=COALESCE(private_at,?) WHERE id=?').bind(new Date().toISOString(), run.id).run()
+  if (!reason && (custom || unot)) await env.DB.prepare('UPDATE agent_runs SET private_at=COALESCE(private_at,?) WHERE id=?').bind(new Date().toISOString(), run.id).run()
   if (callId) await env.DB.prepare(`INSERT INTO agent_tool_decisions(run_id,call_id,tool,effect,untrusted_context,decision,reason,created_at)
     SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM agent_tool_decisions WHERE run_id=?)<?
     ON CONFLICT(run_id,call_id) DO NOTHING`)
-    .bind(run.id, callId, effect === 'external' ? 'external_tool' : effect === 'unknown' ? 'unknown_tool' : name, effect, untrusted ? 1 : 0, reason ? 'blocked' : 'allowed', reason ?? 'context_guard_passed', new Date().toISOString(), run.id, mandate.maxToolCalls).run()
+    .bind(run.id, callId, effect === 'external' ? 'external_tool' : effect === 'unknown' ? 'unknown_tool' : name, effect, untrusted ? 1 : 0, reason ? 'blocked' : 'allowed', reason ?? (unot ? 'unot_draft_author_connection' : 'context_guard_passed'), new Date().toISOString(), run.id, mandate.maxToolCalls).run()
   if (reason === 'private_context_blocks_egress') fail(403, 'private_context_egress', 'This Run has read private data, so it cannot send requests to outside services. Start a new conversation for web research; no request was sent.')
   if (reason) fail(403, 'tool_review_required', 'This operation requires exact human review. Sensitive-action approvals are unavailable; no effect was executed.')
 }
@@ -125,7 +128,9 @@ export async function runReport(env: ZugoidEnv, run: AgentRun): Promise<{ text: 
   // The initiating Member chose this conversation as the destination for the answer. An answer
   // drawn from private sources may only be posted where the initiator is the only human reader.
   if ((!run.taskId || mandate.scheduledOrigin) && run.status === 'completed' && run.resultText && autonomousExecution(mandate.execution?.mode)) {
-    const privateSource = Boolean(run.taskId || mandate.scheduledOrigin) || await readPrivateSource(env, run)
+    const { where, value } = await runLineage(env, run)
+    const unot = await env.DB.prepare(`SELECT 1 FROM agent_tool_decisions d JOIN agent_runs r ON r.id=d.run_id WHERE ${where} AND d.reason='unot_draft_author_connection' LIMIT 1`).bind(value).first()
+    const privateSource = Boolean(run.taskId || mandate.scheduledOrigin || unot) || await readPrivateSource(env, run)
     // A custom connection's answer stays here: the Owner granted it to the person asking, for use where they ask.
     if (!privateSource || await initiatorOnlyAudience(env, run)) {
       return { restricted: false, text: run.resultText.slice(0, AGENT_ANSWER_MAX) }
