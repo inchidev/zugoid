@@ -1,9 +1,11 @@
 import { z } from 'zod'
 import { Permission } from '../../../../shared/permissions'
+import { getServerId } from '../../../../shared/server-id'
 import { findAgentRun, runAuthorization } from '../../../utils/agent-run-service'
 import { requireRunReader } from '../../../utils/agent-tool-security'
 import { cf, fail } from '../../../utils/cf'
-import { requireChannelAccess } from '../../../utils/guards'
+import { requireMember } from '../../../utils/guards'
+import { requireChannelAccessForMember } from '../../../utils/channel-access'
 import { canProposeWorkSchedule, scheduleProposals } from '../../../utils/schedule-proposals'
 import { createSchedule } from '../../../utils/schedule-service'
 import { parseBody } from '../../../utils/validate'
@@ -15,8 +17,10 @@ export default defineEventHandler(async event => {
   const { env } = cf(event)
   const run = await findAgentRun(env, getRouterParam(event, 'id')!)
   if (!run) fail(404, 'not_found', 'Run not found')
-  const actor = await requireChannelAccess(event, run.channelId, Permission.sendMessages)
+  const actor = await requireMember(event, await getServerId(env.DB), Permission.manageSchedules)
   requireRunReader(run, actor.user.id)
+  // A DM grants conversation permissions. The saved schedule needs the Member's Server grants.
+  await requireChannelAccessForMember(env, actor, run.channelId, Permission.sendMessages, 'POST')
   const { proposalId } = parseBody(bodySchema, await readBody(event))
   const proposal = (await scheduleProposals(env, run)).find(item => item.id === proposalId)
   if (!proposal || proposal.input.channelId !== run.channelId || proposal.input.agentId !== run.agentId || proposal.input.kind !== 'work') {
