@@ -8,7 +8,7 @@ const props = defineProps<{ proposal: ScheduleProposal; runId: string; agentName
 const { api } = useApi()
 const queryClient = useQueryClient()
 const mobile = useMediaQuery('(max-width: 639px)')
-const open = ref(false)
+const open = ref(useRoute().query.scheduleProposal === props.proposal.id && !props.proposal.confirmed)
 const busy = ref(false)
 const error = ref('')
 const confirmed = ref(false)

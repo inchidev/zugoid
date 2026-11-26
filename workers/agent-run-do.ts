@@ -306,7 +306,7 @@ export class AgentRunDurableObject extends DurableObject<ZugoidEnv> {
     const { text } = await runReport(this.env, run)
     if (!text) return
     const proposals = run.sourceMessageId ? await scheduleProposals(this.env, run) : []
-    const reviewLink = proposals.length ? `\n\n[Review proposed schedule](/runs/${run.id})` : ''
+    const reviewLink = proposals[0] ? `\n\n[Review proposed schedule](/runs/${run.id}?scheduleProposal=${proposals[0].id})` : ''
     const content = text.slice(0, 12000 - reviewLink.length) + reviewLink
     await asRpc<{ postAgentMessage: (input: { agentId: string; content: string; sourceRunId: string }) => Promise<unknown> }>(this.env.CHANNEL_DO.getByName(`channel:${run.channelId}`))
       .postAgentMessage({ agentId: run.agentId, content, sourceRunId: run.id })
