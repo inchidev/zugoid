@@ -19,7 +19,7 @@ Recurring Agent work additionally needs **Execute assigned tasks** and **Use age
 
 ## Create a Schedule
 
-1. Open **Scheduled** in the rail.
+1. Open **Scheduled** in the rail and select **New schedule**.
 2. In **What should happen?**, write the reminder text or the instruction for the Agent.
 3. Choose the **Action**: **Reminder** or **Run an assigned task**.
 4. Choose the **Conversation**. For a task, also choose the **Assigned task**.
@@ -27,18 +27,18 @@ Recurring Agent work additionally needs **Execute assigned tasks** and **Use age
 6. Choose **Repeat**: **Once**, **Daily** or **Weekly**.
 7. Select **Schedule**.
 
-![The Schedules page with the new schedule form showing What should happen?, Action, Conversation, First time, Repeat and Timezone, and the Schedule button](screenshot:agents-schedules-form "Create a Schedule")
+![The New schedule dialog with the reminder text, conversation, and timing fields](screenshot:agents-schedules-form "Create a Schedule")
 
 The first time must be between five seconds and 366 days ahead. Daily and weekly repetitions keep the same wall-clock time across daylight saving changes. A time that falls in a daylight saving gap moves to the first valid time, and a repeated hour uses its first occurrence; the form warns about both.
 
-You can have 50 active Schedules, paused ones included. The form shows how many you use, for example `3 of 50 active`.
+You can have 50 active Schedules, paused ones included. The Scheduled page shows how many you use, for example `3 of 50 active`.
 
 ## Manage Schedules
 
 The list has **Current**, **Active**, **Paused**, **Blocked** and **History** filters. For each Schedule you can:
 
 - **Pause** it, and **Resume** it later. Missed repetitions are skipped, never replayed. A one-time Schedule whose time has passed runs at once when resumed.
-- **Edit** its text, next time, repeat or timezone, and for task work its Task. The action and conversation cannot change; cancel it and create a new one instead. Only the person who created a Schedule can edit it.
+- **Edit** opens a dialog for its text, next time, repeat or timezone, and for task work its Task. To change the action or conversation, cancel it and create a new one. Only the person who created a Schedule can edit it.
 - **Cancel** it.
 - **Remove** a completed or cancelled Schedule from your list.
 - Open **History** to see recent occurrences with links to the delivered message or started Run.
