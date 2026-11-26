@@ -72,9 +72,9 @@ A Session holds one Agent's context for a conversation. A Run is one attempt to 
 
 ## Rail
 
-The Client's navigation: the Server, the Space switcher for someone with more than one Space, then Inbox, Chat, Tasks, Factory, Customers, Agents, Data and Apps. Each section has the same frame: the rail, a list with groups and a create button beside the group where the new thing lands, then the content. A section is a place in the interface, not a resource.
+The Client's navigation: the Server, the Space switcher for someone with more than one Space, then Inbox, Scheduled, Chat, Tasks, Factory, Customers, Agents, Data, Media and Apps. Sections with a resource list show it beside the rail, with a create button beside the group where the new thing lands. A section is a place in the interface.
 
-**Tasks** is the section for everyday work: My tasks and a flat list of boards. **Factory** is the section for coding work: Projects with repositories, and the Runs a Member started. Git and Compute setup is in Server settings. **Schedules** sit in the Agents section.
+**Tasks** is the section for everyday work: My tasks and a flat list of boards. **Factory** is the section for coding work: Projects with repositories, and the Runs a Member started. Git and Compute setup is in Server settings. **Scheduled** opens the member's Schedules directly from the rail. Its page and API follow the Agents module switch.
 
 ## Task, Data and App
 

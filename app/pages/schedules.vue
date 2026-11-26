@@ -102,7 +102,7 @@ const history = ref<string | null>(null)
 
 <template>
   <div class="flex h-full min-h-0 min-w-0 flex-col">
-    <LayoutPageHeader title="Schedules" icon="i-ph-clock" />
+    <LayoutPageHeader title="Scheduled" icon="i-ph-clock" />
     <main class="mx-auto w-full max-w-3xl flex-1 space-y-6 overflow-auto p-4 sm:p-8">
     <h2 class="text-lg font-medium">Reminders and recurring work</h2>
     <UAlert v-if="!can(Permission.manageSchedules)" title="Your role does not allow schedules" color="neutral" />

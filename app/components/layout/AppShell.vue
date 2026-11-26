@@ -28,7 +28,8 @@ const liveRoute = useRouter().currentRoute
 const hasMenu = computed(() => hasServerNavigationMenu(liveRoute.value.path))
 const sectionIntent = ref<ReturnType<typeof serverNavigationSection>>(null)
 function selectSection(path: string) {
-  sectionIntent.value = isMobile.value ? serverNavigationSection(path) : null
+  sectionIntent.value = isMobile.value && hasServerNavigationMenu(path) ? serverNavigationSection(path) : null
+  if (isMobile.value && !sectionIntent.value) ui.mobilePane = 'chat'
 }
 function selectResource(navigates: boolean) {
   sectionIntent.value = null

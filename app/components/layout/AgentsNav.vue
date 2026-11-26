@@ -8,7 +8,6 @@ const { api } = useApi()
 const nav = useNavActions()
 const { can } = useRoleGrants()
 const { agents, members, messageAgent } = useAgentDirectory(() => props.serverId)
-// A Schedule is the one thing here that needs neither: its own permission brings someone to this section.
 const showsAgents = computed(() => can(Permission.useAgents) || can(Permission.manageAgents))
 const conversations = useQuery({ queryKey: ['dms'], queryFn: () => api<{ channels: ChannelDTO[]; threads?: SidebarThreadDTO[] }>('/api/dms'), refetchInterval: 3000, enabled: showsAgents })
 const selectedAgent = computed(() => {
@@ -26,12 +25,6 @@ function statusOf(agent: { agentStatus?: string | null; user: { id: string; disp
 
 <template>
   <nav aria-label="Agents" class="space-y-3">
-    <div v-if="can(Permission.manageSchedules)" class="px-2">
-      <LayoutNavRow to="/schedules" :active="route.path.startsWith('/schedules')">
-        <template #leading><UIcon name="i-ph-clock" class="size-[18px] shrink-0 text-dimmed" /></template>
-        Schedules
-      </LayoutNavRow>
-    </div>
     <LayoutNavSection
       v-if="showsAgents"
       label="Agents"
