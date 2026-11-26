@@ -28,7 +28,7 @@ import { gadgetSpecSchema } from './gadget-spec'
 import { readCodeFile, readCodeSchema, readCodeTree, publishCodeProposal, codeProposalChecks } from './agent-code-service'
 import { codeProposalSchema } from '../../shared/code-environments'
 import { createSchedule, listSchedules, cancelSchedule, updateSchedule } from './schedule-service'
-import { scheduleStatusFilters } from '../../shared/schedules'
+import { scheduleProposalInputSchema, scheduleRequestSchema, scheduleStatusFilters } from '../../shared/schedules'
 import { createAgentRun, findAgentRun, runAuthorization } from './agent-run-service'
 import { loadAuthorizationContext } from './authorization'
 import type { AgentRun, RunMandate, RuntimeTool } from '../../shared/agent-execution'
@@ -53,7 +53,6 @@ import { spaceResourceDenied } from '../../shared/spaces'
 import { agentInSpacesSql } from './agent-access'
 import { inspectPrivateProjectRepository, inspectPublicProjectRepository, listPrivateProjectRepositories, listPublicProjectRepositories, readPrivateProjectFile } from './agent-chat-repositories'
 import { searchToolCatalog, validateToolCatalog, type DiscoverableTool, type ToolGuidance } from '../../shared/tool-discovery'
-import { scheduleProposalInputSchema, scheduleRequestSchema } from '../../shared/schedules'
 
 /** Where a picture drawn for a Run waits for its box to fetch it. */
 export const agentImageKey = (runId: string, id: string) => `agent-images/${runId}/${id}`
