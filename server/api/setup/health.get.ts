@@ -9,7 +9,7 @@ import { schemaCurrent, userCount, serverReady } from '../../utils/db'
 import type { SetupBindings, SetupHealth, SetupHealthDetails } from '../../../shared/types'
 import { readAppBranding } from '../../../shared/app-branding'
 import { readOwnerSetup } from '../../utils/owner-setup'
-import { partnerSignInKey } from '../../utils/partner-signin'
+import { partnerLogin, partnerSignInKey } from '../../utils/partner-signin'
 import { serverVersion } from '../../utils/version'
 import { publicServerAppearance } from '../../utils/server-appearance'
 import { readServerTheme } from '../../utils/server-theme'
@@ -95,6 +95,7 @@ export default defineEventHandler(async (event): Promise<SetupHealth> => {
   const origin = await requestServerOrigin(env, getRequestURL(event).origin, '')
   const appearance = migrated ? await publicServerAppearance(env.DB, origin, branding.appName) : null
 
+  const login = partnerLogin(env)
   const health: SetupHealth = {
     version: serverVersion(env),
     authMode: authMode(env),
@@ -103,6 +104,7 @@ export default defineEventHandler(async (event): Promise<SetupHealth> => {
     migrated,
     ownerSetup: Boolean(ownerSetup),
     ...(partnerSignInKey(env) ? { partner: true } : {}),
+    ...(login ? { partnerLoginName: login.label } : {}),
     ...branding,
     ...(appearance ? { appName: appearance.name, iconUrl: appearance.iconUrl } : {}),
     // The sign-in page wears the theme too, so it is public like the name and icon.

@@ -3,6 +3,7 @@ import * as z from 'zod'
 import type { FormSubmitEvent } from '@nuxt/ui'
 import type { AuthLoginMethod, PublicAuthConfig } from '~~/shared/types'
 import { DEFAULT_APP_NAME } from '~~/shared/app-branding'
+import { partnerDestination } from '~~/shared/partner-destination'
 
 definePageMeta({ layout: 'auth', middleware: ['guest'] })
 
@@ -12,11 +13,28 @@ const route = useRoute()
 const toast = useToast()
 const busy = ref(false)
 const socialBusy = ref<AuthLoginMethod | null>(null)
+const partnerBusy = ref(false)
 const error = ref<string | null>(null)
 const { api, native, serverUrl, serverOrigin } = useApi()
 const { data: authConfig } = await useFetch<PublicAuthConfig>('/api/auth/config', {
   $fetch: native ? globalThis.$fetch : undefined,
 })
+
+async function continueWithPartner() {
+  partnerBusy.value = true
+  error.value = null
+  try {
+    const { url } = await api<{ url: string }>('/api/auth/partner/start', {
+      method: 'POST',
+      body: { next: partnerDestination(typeof route.query.next === 'string' ? route.query.next : null) },
+    })
+    window.location.assign(url)
+  }
+  catch (err) {
+    error.value = errorMessage(err)
+    partnerBusy.value = false
+  }
+}
 
 const schema = z.object({
   login: z.string().trim().min(1, 'Enter your username or email'),
@@ -34,7 +52,7 @@ onMounted(async () => {
     await navigateTo(safeNextPath(), { external: safeNextPath().startsWith('/api/auth/connection/authorize?') })
     return
   }
-  if (session.health && !session.health.ready) await navigateTo('/setup')
+  if (session.health && !session.health.ready && !(session.health.ok && session.health.partnerLoginName)) await navigateTo('/setup')
   if (route.query.reset === '1') toast.add({ title: 'Password reset. You can sign in.', color: 'success' })
 })
 
@@ -145,8 +163,18 @@ const canCreateAccount = computed(() => Boolean(
       description="Sign in here once, and from now on it opens straight on the marking page."
     />
 
+    <UButton
+      v-if="session.health?.partnerLoginName && !native"
+      class="mt-6"
+      size="lg"
+      block
+      :loading="partnerBusy"
+      :label="`Continue with ${session.health.partnerLoginName}`"
+      @click="continueWithPartner"
+    />
+
     <UAlert
-      v-if="session.health?.partner"
+      v-else-if="session.health?.partner"
       class="mt-6"
       color="neutral"
       variant="subtle"

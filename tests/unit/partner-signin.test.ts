@@ -57,4 +57,12 @@ describe('partner tickets', () => {
   it('refuses a ticket without the platform as issuer', async () => {
     expect(await readPartnerTicket(env, await sign(claims({ iss: 'someone' })), 'sign-in', NOW)).toBeNull()
   })
+
+  it('authenticates the browser state and validates the avatar reference on a direct login ticket', async () => {
+    const direct = { state: 'a'.repeat(32), photo: 'b'.repeat(64) }
+    const token = await sign(claims({ direct }))
+    expect(await readPartnerTicket(env, token, 'sign-in', NOW)).toMatchObject({ direct })
+    expect(await readPartnerTicket(env, await sign(claims({ direct: { ...direct, state: 'short' } })), 'sign-in', NOW)).toBeNull()
+    expect(await readPartnerTicket(env, await sign(claims({ direct: { ...direct, photo: 'https://example.com/photo' } })), 'sign-in', NOW)).toBeNull()
+  })
 })

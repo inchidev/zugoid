@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AuthCredentialProvider, AuthSettingsAdminDTO, RegistrationMode } from '~~/shared/types'
 const { api } = useApi()
+const session = useSessionStore()
 
 const props = defineProps<{ serverId: string }>()
 const toast = useToast()
@@ -161,6 +162,13 @@ onMounted(load)
 
       <h2 class="mt-10 text-xs font-bold uppercase tracking-wide text-muted">Login methods</h2>
       <div class="mt-3 divide-y divide-default rounded-lg bg-elevated px-4">
+        <div v-if="session.health?.partnerLoginName" class="py-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="font-medium text-highlighted">{{ session.health.partnerLoginName }}</p>
+            <UBadge label="Managed by deployment" color="neutral" variant="subtle" />
+          </div>
+          <p class="mt-1 text-xs text-muted">Studio members can use their {{ session.health.partnerLoginName }} account to sign in.</p>
+        </div>
         <div v-for="provider in socialProviders" :key="provider.id" class="py-5">
           <div class="flex items-center justify-between gap-4">
             <div class="flex items-center gap-2">

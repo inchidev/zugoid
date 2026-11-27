@@ -140,7 +140,7 @@ const CURRENT_USER = Symbol('zugoid.currentUser')
 const CURRENT_SESSION = Symbol('zugoid.currentSession')
 
 /** One lookup per request, however many checks ask for the session. */
-function currentSession(event: H3Event) {
+export function currentSession(event: H3Event) {
   const context = event.context as { [CURRENT_SESSION]?: ReturnType<typeof readSession> }
   context[CURRENT_SESSION] ??= readSession(event)
   return context[CURRENT_SESSION]

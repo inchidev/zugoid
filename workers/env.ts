@@ -147,6 +147,8 @@ export type ZugoidEnv = {
   PARTNER_SIGNIN_KEY?: string
   /** Display name of this Server’s sign-in partner. */
   PARTNER_DISPLAY_NAME?: string
+  /** HTTPS origin of the app that handles sign-in started from this Server. */
+  PARTNER_LOGIN_ORIGIN?: string
   /** The Host a proxy rewrites this Server's requests to, for a runtime that picks the Worker by Host: served as PUBLIC_ORIGIN. */
   ZUGOID_INTERNAL_HOST?: string
   ADMIN_PASSWORD?: string
