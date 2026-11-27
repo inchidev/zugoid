@@ -7,6 +7,7 @@ import { createAgentRun, findAgentRun, runAuthorization, runCapability, verifyRu
 import { agentGateway } from '../../server/utils/agent-gateway'
 import { agentTools, executeRunTool } from '../../server/utils/agent-tools'
 import { saveAgentProvider } from '../../server/utils/agent-providers'
+import { updateIntegrations } from '../../server/utils/integrations'
 import { writeServerSetting } from '../../shared/server-settings'
 import { ALL_PERMISSIONS, Permission } from '../../shared/permissions'
 import type { ZugoidEnv } from '../../workers/env'
@@ -128,6 +129,67 @@ describe('Pi run authorization', () => {
     expect(await revoked.json()).toMatchObject({ error: { message: 'Current permissions do not allow this operation' } })
     expect((await call('details-2', 'get_tool_details', { name: 'list_tasks', purpose: 'Retry' })).status).toBe(403)
     expect((await call('forged-direct', 'list_tasks', {})).status).toBe(403)
+  })
+
+  it('searches X from a Run on another model using the stored xAI key', async () => {
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')
+    const run = await createAgentRun(env, (await start())!, input())
+    expect(run.model).toBe('@cf/test')
+    db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+    const token = await runCapability(env, run.id)
+    const call = (callId: string, name: string, args: unknown) => agentGateway(new Request('http://server/tools', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ callId, name, arguments: args }),
+    }), env, run.id, 'tools', () => {})
+    const search = (id: string) => call(id, 'search_tools', { query: 'search_x' })
+    const xTool = expect.objectContaining({ name: 'search_x', cost: 'inference' })
+    expect((await (await search('x-disabled')).json()).tools).not.toEqual(expect.arrayContaining([xTool]))
+    await updateIntegrations(env, { values: { XAI_API_KEY: 'synthetic-xai-key' } })
+    expect(await (await search('x-enabled')).json()).toMatchObject({
+      tools: expect.arrayContaining([xTool]),
+    })
+
+    const transport = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request, init) => {
+      expect(String(request)).toBe('https://api.x.ai/v1/responses')
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer synthetic-xai-key')
+      expect(init?.redirect).toBe('manual')
+      const body = JSON.parse(String(init?.body))
+      expect(body).toMatchObject({ store: false, max_turns: 3, parallel_tool_calls: false,
+        tools: [{ type: 'x_search', allowed_x_handles: ['zugoid'], from_date: '2026-11-25', to_date: '2026-11-27' }],
+      })
+      expect(body.input[1]).toEqual({ role: 'user', content: 'What shipped recently?' })
+      expect(String(init?.body)).not.toContain(run.prompt)
+      return Response.json({ status: 'completed', output: [
+        { type: 'custom_tool_call', name: 'x_keyword_search' },
+        { type: 'message', role: 'assistant', content: [
+          { type: 'output_text', text: 'The release is public.', annotations: [
+            { type: 'url_citation', url: 'https://twitter.com/zugoid/status/123?s=20' },
+            { type: 'url_citation', url: 'https://x.com/zugoid/status/123/photo/1' },
+            { type: 'url_citation', url: 'https://x.com/zugoid/status/456' },
+            { type: 'url_citation', url: 'https://x.com.example.org/zugoid/status/789' },
+            { type: 'url_citation', url: 'https://x.com/zugoid' },
+          ] },
+        ] },
+      ], usage: { total_tokens: 1700 } })
+    })
+    try {
+      const args = { query: 'What shipped recently?', handles: ['@Zugoid', 'zugoid'], fromDate: '2026-11-25', toDate: '2026-11-27' }
+      const response = await call('x-watch', 'search_x', args)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        summary: 'The release is public.',
+        sources: [{ url: 'https://x.com/zugoid/status/123' }, { url: 'https://x.com/zugoid/status/456' }],
+      })
+      expect(await findAgentRun(env, run.id)).toMatchObject({ totalTokens: 1700, modelCalls: 1 })
+      expect((await call('x-watch', 'search_x', args)).ok).toBe(true)
+      expect((await call('x-invalid-range', 'search_x', { ...args, toDate: '2026-11-24' })).ok).toBe(false)
+      db.prepare('UPDATE agent_runs SET private_at=? WHERE id=?').run(new Date().toISOString(), run.id)
+      expect((await call('x-after-private', 'search_x', args)).status).toBe(403)
+      expect(transport).toHaveBeenCalledTimes(1)
+
+      await updateIntegrations(env, { values: { XAI_API_KEY: null } })
+      expect((await (await search('x-disconnected')).json()).tools).not.toEqual(expect.arrayContaining([xTool]))
+    } finally { transport.mockRestore() }
   })
 
   it('watches a bounded YouTube clip through Gemini from a Run using another model', async () => {

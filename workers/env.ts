@@ -37,6 +37,7 @@ export type ZugoidEnv = {
   AGENT_CALLBACK_ORIGIN?: string
   /** Optional search provider credential; never sent to compute. */
   EXA_API_KEY?: string
+  XAI_API_KEY?: string
 
   DB: D1Database
   BACKUPS?: R2Bucket

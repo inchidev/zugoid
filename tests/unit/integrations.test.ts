@@ -83,10 +83,14 @@ it('reports a value saved by another isolate at once, past the cache', async () 
   expect(status.status.search).toBe('exa')
   expect(status.fields.EXA_API_KEY?.source).toBe('settings')
 })
-it('offers only web search on Cloudflare, where the rest comes from bindings', async () => {
+it('offers web and X Search on Cloudflare, where the rest comes from bindings', async () => {
+  await updateIntegrations(env, { values: { XAI_API_KEY: 'xai-synthetic-key' } })
   const status = await integrationsStatus({ ...f.env, ZUGOID_RUNTIME: 'workers' } as ZugoidEnv, ids.owner, 'https://zugoid.example')
   expect(status.cloudflareNetwork).toBe(true)
-  expect(Object.keys(status.fields)).toEqual(['EXA_API_KEY'])
+  expect(Object.keys(status.fields)).toEqual(['EXA_API_KEY', 'XAI_API_KEY'])
+  expect(status.fields.XAI_API_KEY).toEqual({ source: 'settings', value: null })
+  expect(stored()).not.toContain('xai-synthetic-key')
+  expect((await withIntegrations(env)).XAI_API_KEY).toBe('xai-synthetic-key')
 })
 
 it.each([
