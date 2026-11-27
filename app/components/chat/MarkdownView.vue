@@ -7,6 +7,7 @@ const props = defineProps<{
   names?: Record<string, string>
   /** `internal` shows cards only for this Server's own links. */
   previews?: boolean | 'internal'
+  emailText?: boolean
 }>()
 
 const html = computed(() => renderMarkdown(props.content, props.names))
@@ -48,7 +49,7 @@ function onKey(event: KeyboardEvent) {
   <div class="min-w-0">
     <!-- markdown.ts escapes HTML and drops javascript: URLs -->
     <!-- eslint-disable-next-line vue/no-v-html -->
-    <div class="md break-words" @click="onClick" @keydown="onKey" v-html="html" />
+    <div class="md break-words" :data-email-text="emailText || undefined" @click="onClick" @keydown="onKey" v-html="html" />
     <ChatLinkPreviews v-if="links.length" :urls="links" />
   </div>
 </template>

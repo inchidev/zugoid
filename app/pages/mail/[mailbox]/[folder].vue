@@ -37,6 +37,7 @@ const composeFormat = ref<'text' | 'markdown'>('text')
 const composeField = ref<{ textareaRef?: HTMLTextAreaElement } | null>(null)
 const uploadingFiles = ref(0)
 const sending = ref(false)
+const refreshing = ref(false)
 /** Searches the open folder of this mailbox. */
 const searchInput = ref('')
 const search = refDebounced(computed(() => searchInput.value.trim()), 300)
@@ -70,13 +71,29 @@ const threadsQ = useInfiniteQuery({
   refetchInterval: 60_000,
 })
 const threads = computed(() => threadsQ.data.value?.pages.flatMap(page => page.threads) ?? [])
+const draftsKey = computed(() => ['mail-drafts', activeMailboxId.value] as const)
 const draftsQ = useQuery({
-  queryKey: computed(() => ['mail-drafts', activeMailboxId.value]),
+  queryKey: draftsKey,
   queryFn: () => api<{ drafts: MailDraftDTO[] }>(`/api/mail/mailboxes/${activeMailboxId.value}/drafts`),
   enabled: computed(() => Boolean(activeMailboxId.value) && canSend.value),
 })
 const drafts = computed(() => draftsQ.data.value?.drafts ?? [])
 const listPending = computed(() => folder.value === 'drafts' ? draftsQ.isPending.value : threadsQ.isPending.value)
+
+async function refreshMail() {
+  if (refreshing.value) return
+  const threadId = activeThreadId.value
+  const folderKey = folder.value === 'drafts' ? draftsKey.value : threadsKey.value
+  const keys = [folderKey, ['mailboxes'], ...(threadId ? [['customer-conversation', threadId], ['messages', threadId]] : [])]
+  refreshing.value = true
+  try {
+    const results = await Promise.allSettled(keys.map(queryKey => qc.refetchQueries(
+      { queryKey, exact: true, type: 'active' }, { cancelRefetch: false, throwOnError: true },
+    )))
+    if (results.some(result => result.status === 'rejected')) toast.add({ title: 'Could not refresh all mail', color: 'error' })
+  }
+  finally { refreshing.value = false }
+}
 
 /** Hovering a conversation loads it, so opening it is immediate. */
 function prefetchThread(threadId: string) {
@@ -120,7 +137,7 @@ async function compose() {
     if (result.message.email?.deliveryStatus === 'failed') {
       toast.add({ title: 'Your email was saved but not delivered', description: result.message.email.deliveryError || 'You can retry it from the conversation.', color: 'error' })
     }
-    await navigateTo(mailPath(mailboxId, 'sent', result.threadId))
+    await navigateTo(mailPath(mailboxId, folder.value === 'all' ? 'all' : 'sent', result.threadId))
   }
   catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
   finally { sending.value = false }
@@ -217,7 +234,7 @@ function draftTitle(item: MailDraftDTO) {
   return item.subject.trim() || '(no subject)'
 }
 
-const folderLabel = computed(() => folder.value.charAt(0).toUpperCase() + folder.value.slice(1))
+const folderLabel = computed(() => folder.value === 'all' ? 'All mail' : folder.value.charAt(0).toUpperCase() + folder.value.slice(1))
 </script>
 
 <template>
@@ -240,6 +257,9 @@ const folderLabel = computed(() => folder.value.charAt(0).toUpperCase() + folder
             <p class="truncate text-sm font-medium text-highlighted">{{ folderLabel }}</p>
             <p class="truncate text-[11px] text-muted">{{ activeMailbox?.address || 'Mail' }}</p>
           </div>
+          <UTooltip text="Refresh mail">
+            <UButton type="button" icon="i-ph-arrows-clockwise" aria-label="Refresh mail" color="neutral" variant="ghost" size="sm" square :loading="refreshing" @click="refreshMail" />
+          </UTooltip>
           <UButton v-if="canSend" label="Compose" trailing-icon="i-ph-pencil-simple" size="sm" @click="nav.composeOpen.value = true" />
         </div>
         <div v-if="activeMailbox && folder !== 'drafts'" class="border-b border-default px-3 py-2">

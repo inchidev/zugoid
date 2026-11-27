@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useQuery } from '@tanstack/vue-query'
 import type { MailboxDTO } from '~~/shared/types'
-import { MAIL_FOLDERS, mailPath } from '~~/shared/paths'
+import { MAIL_FOLDERS, mailPath, type MailFolder } from '~~/shared/paths'
 
 const route = useRoute()
 const { api } = useApi()
@@ -20,10 +20,11 @@ const canCompose = computed(() => activeMailbox.value?.permission === 'send' || 
 /** Drafts belong to people who can send from the mailbox. */
 const folders = computed(() => MAIL_FOLDERS.filter(folder => folder !== 'drafts' || canCompose.value))
 
-const folderMeta: Record<string, { label: string; icon: string }> = {
+const folderMeta: Record<MailFolder, { label: string; icon: string }> = {
   inbox: { label: 'Inbox', icon: 'i-ph-tray' },
   drafts: { label: 'Drafts', icon: 'i-ph-note-pencil' },
   sent: { label: 'Sent', icon: 'i-ph-paper-plane-tilt' },
+  all: { label: 'All mail', icon: 'i-ph-envelope-simple' },
   archive: { label: 'Archive', icon: 'i-ph-archive' },
   spam: { label: 'Spam', icon: 'i-ph-warning' },
   trash: { label: 'Trash', icon: 'i-ph-trash' },
@@ -77,9 +78,9 @@ async function compose() {
               :active="folder === activeFolder"
             >
               <template #leading>
-                <UIcon :name="folderMeta[folder]!.icon" class="size-[18px] shrink-0 text-dimmed" />
+                <UIcon :name="folderMeta[folder].icon" class="size-[18px] shrink-0 text-dimmed" />
               </template>
-              {{ folderMeta[folder]!.label }}
+              {{ folderMeta[folder].label }}
               <template #trailing>
                 <UBadge
                   v-if="folder === 'inbox' && mailbox.unreadCount"

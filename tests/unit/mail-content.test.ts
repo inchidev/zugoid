@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { plainMailBody, readableMailContent } from '../../shared/mail-content'
+import { splitMailQuote } from '../../shared/mail-quotes'
 import { mailThreadDto } from '../../server/utils/mail-data'
 
 describe('mail text bodies', () => {
@@ -32,5 +33,30 @@ describe('mail text bodies', () => {
     const row = { channelId: 'thread', mailboxChannelId: 'mailbox', subject: 'Example', status: 'inbox' as const, participantsJson: '[]', lastMessageAt: '2026-10-14T00:00:00Z', preview }
     expect(mailThreadDto(row).preview).toBe(preview)
     expect(mailThreadDto({ ...row, previewInbound: true }).preview).toBe('Example HTML')
+  })
+})
+
+describe('mail quote display', () => {
+  it('separates a quoted tail from HTML or plain text and keeps the text available', () => {
+    const plain = 'Thanks!\r\n\r\nOn Tuesday, Alex wrote:\r\n> Previous text\r\n>> Earlier text'
+    expect(splitMailQuote(plain)).toEqual({
+      body: 'Thanks!', quote: 'On Tuesday, Alex wrote:\n> Previous text\n>> Earlier text',
+    })
+    const html = plainMailBody(undefined, '<p>Thanks!</p><blockquote><p>Previous text</p></blockquote>')
+    expect(splitMailQuote(html)).toEqual({ body: 'Thanks!', quote: '> Previous text' })
+  })
+
+  it('folds a delimited original message with a mail header', () => {
+    const quote = '-----Original Message-----\nFrom: Alex <alex@example.net>\nSubject: Question\n\nPrevious text'
+    expect(splitMailQuote(`Thanks!\n\n${quote}`)).toEqual({ body: 'Thanks!', quote })
+  })
+
+  it.each([
+    '> Only quoted text',
+    'On Tuesday, Alex wrote:\n> Only quoted text',
+    '> Question\n\nA reply below the quote',
+    'Some text\n-----Original Message-----\nMore text with no header',
+  ])('leaves the original visible when a quoted tail cannot be separated: %s', (body) => {
+    expect(splitMailQuote(body)).toEqual({ body, quote: '' })
   })
 })

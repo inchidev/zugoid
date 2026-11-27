@@ -32,6 +32,8 @@ const props = withDefaults(defineProps<{
   canCreateTasks?: boolean
   /** Ordinary chats can be left unread in Inbox; task discussions have their own destination. */
   canMarkUnread?: boolean
+  /** Opening an email marks its loaded conversation read before scrolling. */
+  readOnOpen?: boolean
   /** An archived conversation: history only. Existing threads still open; nothing new is added. */
   readOnly?: boolean
 }>(), { channelName: undefined, linkPath: undefined, showIntro: true, allowThreads: true })
@@ -277,7 +279,8 @@ function scrollToBottom(smooth = false) {
 function markReadIfVisible() {
   const message = messages.value.findLast(item => !isStream(item))
   if (leaveUnread.value || !scroller.value || !message || message.channelId !== props.channelId || ui.searchOpen || document.hidden || !document.hasFocus()) return
-  if (distanceFromBottom() > BOTTOM_SLACK || message.id === lastRead || message.id.startsWith('tmp:')) return
+  if (message.id === lastRead || message.id.startsWith('tmp:')) return
+  if ((!props.readOnOpen || lastRead) && distanceFromBottom() > BOTTOM_SLACK) return
   if (readGeneration === undefined && (!readSnapshot.isFetchedAfterMount.value || readSnapshot.isFetching.value)) return
   readGeneration ??= readSnapshot.data.value?.readGeneration
   if (readGeneration === undefined) return

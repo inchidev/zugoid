@@ -4,7 +4,7 @@ import { getServerId } from '../shared/server-id'
 import { notificationPreview } from '../shared/notifications'
 import { channelPath, scheduleConversationPath } from '../shared/paths'
 import type { PublicUser } from '../shared/types'
-import type { ServerChannelActivityEvent, ServerChannelReadEvent } from '../shared/server-realtime'
+import type { ServerChannelActivityEvent, ServerChannelReadEvent, ServerMailChangedEvent } from '../shared/server-realtime'
 import { asRpc, type ZugoidEnv } from './env'
 import { channelHasUnread } from './unread'
 import { inheritsParentChannel } from '../shared/channel-kinds'
@@ -123,6 +123,18 @@ export async function signalChannelRead(
 ): Promise<void> {
   const root = await resolveChannelRoot(env.DB, channelId)
   if (!root) return
+  const stub = asRpc<{
+    notifyChannelRead: (event: ServerChannelReadEvent, userId: string) => Promise<void>
+    notifyMailChanged: (event: ServerMailChangedEvent, recipientIds: string[]) => Promise<void>
+  }>(env.SERVER_DO.getByName(`server:${(await getServerId(env.DB))}`))
+  if (root.id !== channelId) {
+    const mail = await env.DB.prepare('SELECT mailbox_channel_id AS mailboxId FROM email_threads WHERE channel_id = ?')
+      .bind(channelId).first<{ mailboxId: string }>()
+    if (mail) {
+      await stub.notifyMailChanged({ t: 'mail.changed', mailboxId: mail.mailboxId, threadId: channelId }, [userId])
+      return
+    }
+  }
   const state = await env.DB.prepare(`SELECT r.last_read_message_id AS cursor, COALESCE(a.read_generation, 0) AS generation
     FROM channels c LEFT JOIN channel_reads r ON r.channel_id = c.id AND r.user_id = ?2
     LEFT JOIN channel_attention a ON a.channel_id = c.id AND a.user_id = ?2 WHERE c.id = ?1`)
@@ -135,9 +147,6 @@ export async function signalChannelRead(
     messageId: state ? state.cursor ?? '' : messageId,
     unread: await channelHasUnread(env.DB, userId, root.id),
   }
-  const stub = asRpc<{
-    notifyChannelRead: (event: ServerChannelReadEvent, userId: string) => Promise<void>
-  }>(env.SERVER_DO.getByName(`server:${(await getServerId(env.DB))}`))
   await stub.notifyChannelRead(event, userId)
 }
 

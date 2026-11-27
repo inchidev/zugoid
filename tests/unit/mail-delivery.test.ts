@@ -343,7 +343,7 @@ describe('mail folders', () => {
         VALUES ('${id}-start', '${id}', 'support', 'outbound', 'support@example.com', '["customer@example.net"]', 'sent', '${at}');
     `)
   }
-  const list = async (folder: 'inbox' | 'sent' | 'archive' | 'trash') =>
+  const list = async (folder: 'inbox' | 'sent' | 'all' | 'archive' | 'trash') =>
     (await listMailThreads(env, { mailboxId: 'support', userId: 'owner', folder })).threads.map(thread => thread.subject)
 
   it('keeps conversations you started in Sent until someone replies', async () => {
@@ -366,6 +366,35 @@ describe('mail folders', () => {
     expect(await list('sent')).toEqual(['Newer', 'Older'])
     expect(await list('archive')).toEqual(['Older'])
     expect(await list('trash')).toEqual(['Binned'])
+  })
+
+  it('keeps the outgoing timestamp and preview together after a reply or a note', async () => {
+    const sentAt = '2026-09-29T10:00:00.000Z'
+    started('Quote', sentAt)
+    sqlite.exec("UPDATE email_messages SET rfc_message_id = '<quote@example.com>' WHERE message_id = 'Quote-start'")
+    await receive(email({ id: '<answer@example.net>', to: 'support@example.com', inReplyTo: '<quote@example.com>', body: 'Customer reply' }), 'support@example.com')
+    sqlite.exec(`INSERT INTO messages (id, channel_id, author_id, content, created_at)
+      VALUES ('team-note', 'Quote', 'owner', 'Team note', '2099-01-01T00:00:00.000Z')`)
+
+    const sent = await listMailThreads(env, { mailboxId: 'support', userId: 'owner', folder: 'sent' })
+    expect(sent.threads).toMatchObject([{ channelId: 'Quote', preview: 'Hello from us', lastMessageAt: sentAt }])
+    const inbox = await listMailThreads(env, { mailboxId: 'support', userId: 'owner', folder: 'inbox' })
+    expect(inbox.threads).toMatchObject([{ channelId: 'Quote', preview: 'Team note' }])
+  })
+
+  it('lists one copy of each regular conversation in All mail', async () => {
+    started('Outgoing', '2026-09-29T11:00:00.000Z')
+    started('Archived', '2026-09-29T10:00:00.000Z', 'archive')
+    started('Spam', '2026-09-29T13:00:00.000Z', 'spam')
+    started('Trash', '2026-09-29T12:00:00.000Z', 'trash')
+    sqlite.exec("UPDATE email_messages SET rfc_message_id = '<outgoing@example.com>' WHERE message_id = 'Outgoing-start'")
+    await receive(email({ id: '<answer@example.net>', to: 'support@example.com', inReplyTo: '<outgoing@example.com>' }), 'support@example.com')
+    await receive(email({ id: '<inbound@example.net>', to: 'support@example.com', subject: 'Incoming' }), 'support@example.com')
+    await receive(email({ id: '<sales@example.net>', to: 'sales@example.com', subject: 'Other mailbox' }), 'sales@example.com')
+
+    const all = await list('all')
+    expect(all).toHaveLength(3)
+    expect(all).toEqual(expect.arrayContaining(['Outgoing', 'Archived', 'Incoming']))
   })
 
   describe('sender authentication', () => {
