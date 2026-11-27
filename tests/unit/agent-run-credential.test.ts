@@ -13,6 +13,8 @@ import { runMcpCredential } from '../../server/utils/mcp-run-credential'
 import { serveMcpRequest } from '../../server/utils/mcp-server'
 import type { McpPrincipal } from '../../server/utils/mcp-principal'
 import { Permission } from '../../shared/permissions'
+import { writeServerSetting } from '../../shared/server-settings'
+import { beginThreadsConnection, completeThreadsConnection, disconnectThreads } from '../../server/utils/threads-connection'
 import type { ZugoidEnv } from '../../workers/env'
 
 /**
@@ -67,14 +69,18 @@ async function wake(by: string) {
   return { run, token: payload.server.credential!.token, payload }
 }
 const authenticate = (token: string) => authenticateMcpRequest(env, new Request('https://team.example/mcp', { headers: { Authorization: `Bearer ${token}` } }))
-async function call(principal: McpPrincipal, name: string, args: Record<string, unknown>) {
+async function mcpRequest(principal: McpPrincipal, method: string, params: Record<string, unknown> = {}) {
   const response = await serveMcpRequest(new Request('https://team.example/mcp', {
     method: 'POST', headers: { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json', Host: 'team.example' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   }), { env, principal, schedule: () => {} })
   const body = await response.text()
   const json = body.startsWith('event:') ? body.split('\ndata: ')[1]?.trim() : body
-  const { result } = JSON.parse(json!) as { result: { content: Array<{ type: string; text: string }>; isError?: boolean } }
+  return JSON.parse(json!)
+}
+
+async function call(principal: McpPrincipal, name: string, args: Record<string, unknown>) {
+  const { result } = await mcpRequest(principal, 'tools/call', { name, arguments: args }) as { result: { content: Array<{ type: string; text: string }>; isError?: boolean } }
   const text = result.content[0]!.text
   let value: Record<string, unknown>
   try { value = JSON.parse(text) as Record<string, unknown> } catch { value = { text } }
@@ -112,6 +118,45 @@ describe('an external Agent’s Run credential', () => {
     const data = await call(asOwner, 'list_tables', {})
     expect(data.isError).toBe(true)
     expect(data.value).toMatchObject({ error: { message: expect.stringContaining('The Assistant role cannot perform data:read') } })
+  })
+
+  it('lets only the authorized Run search Threads through MCP and fences Server data from the search', async () => {
+    await external()
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id IN ('agent-role','writer-role')`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role"}')
+    const asVanya = (await authenticate((await wake(vanya)).token))!
+    const asPetya = (await authenticate((await wake(petya)).token))!
+    const standing = { ...asVanya, authorization: { ...asVanya.authorization, credential: { ...asVanya.authorization.credential, id: 'standing-token' } } }
+    const listsThreads = async (principal: McpPrincipal) => {
+      const { result } = await mcpRequest(principal, 'tools/list') as { result: { tools: Array<{ name: string }> } }
+      return result.tools.some(tool => tool.name === 'search_threads')
+    }
+    expect(await listsThreads(asVanya)).toBe(false)
+    const owner = { serverId: SERVER, userId: 'owner-user' }
+    const auth = new URL(await beginThreadsConnection(env, owner, 'https://team.example', { appId: '1234', appSecret: 'synthetic-app-secret' }))
+    const callback = new URL(auth.searchParams.get('redirect_uri')!)
+    callback.searchParams.set('state', auth.searchParams.get('state')!)
+    callback.searchParams.set('code', 'synthetic-code')
+    const transport = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-short-token' }))
+      .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-long-token', expires_in: 5184000 }))
+    try {
+      expect(await completeThreadsConnection(env, owner, callback)).toBe('connected')
+      expect(await listsThreads(asVanya)).toBe(true)
+      expect(await listsThreads(asPetya)).toBe(false)
+      expect(await listsThreads(standing)).toBe(false)
+      transport.mockClear()
+      transport.mockResolvedValueOnce(Response.json({ data: [{ permalink: 'https://www.threads.com/@zugoid/post/abc', text: 'Public launch' }] }))
+      const search = await call(asVanya, 'search_threads', { query: 'public launch' })
+      expect(search.isError, JSON.stringify(search.value)).toBe(false)
+      expect(search.value).toMatchObject({ posts: [{ url: 'https://www.threads.com/@zugoid/post/abc', text: 'Public launch' }] })
+      expect((await call(asVanya, 'list_task_boards', {})).isError).toBe(false)
+      const blocked = await call(asVanya, 'search_threads', { query: 'private notes' })
+      expect(blocked).toMatchObject({ isError: true, value: { error: { code: 'private_context_egress' } } })
+      expect(transport).toHaveBeenCalledTimes(1)
+      await disconnectThreads(env)
+      expect(await listsThreads(asVanya)).toBe(false)
+    } finally { transport.mockRestore() }
   })
 
   it('completes only its own Run', async () => {

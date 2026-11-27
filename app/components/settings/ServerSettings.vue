@@ -128,7 +128,7 @@ const accessNav = computed(() => [
   ...(isOwner.value ? [{ id: 'onboarding' as const, label: 'Onboarding', icon: 'i-ph-flag-banner', keywords: ['welcome', 'first run', 'branding'] }] : []),
   ...(can(Permission.manageServer) ? [{ id: 'audit' as const, label: 'Audit Log', icon: 'i-ph-list-magnifying-glass', keywords: ['history', 'activity', 'log'] }] : []),
 ])
-const storageNav = computed(() => isOwner.value ? [{ id: 'integrations' as const, label: 'Integrations', icon: 'i-ph-plugs', keywords: ['exa', 'xai', 'x search', 'search', 'browser', 'chromium', 'cloudflare', 'token', 'smtp', 'gateway', 'postmark', 'mailgun', 'ses', 'webhook', 'inbound', 'environment'] }, { id: 'storage' as const, label: 'Storage', icon: 'i-ph-database', keywords: ['files', 'kv', 'r2', 'quota'] }] : [])
+const storageNav = computed(() => isOwner.value ? [{ id: 'integrations' as const, label: 'Integrations', icon: 'i-ph-plugs', keywords: ['exa', 'xai', 'x search', 'threads', 'meta', 'search', 'browser', 'chromium', 'cloudflare', 'token', 'smtp', 'gateway', 'postmark', 'mailgun', 'ses', 'webhook', 'inbound', 'environment'] }, { id: 'storage' as const, label: 'Storage', icon: 'i-ph-database', keywords: ['files', 'kv', 'r2', 'quota'] }] : [])
 const deploymentSections = ['cloudflare', 'domains', 'backups', 'updates', 'danger']
 const deploymentNav = computed(() => isOwner.value
   ? [{

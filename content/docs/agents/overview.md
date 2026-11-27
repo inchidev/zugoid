@@ -56,6 +56,7 @@ More capabilities need explicit setup and permissions:
 | --- | --- |
 | Web search and reading pages | **Research the web** for both the Agent and the person asking, plus a search provider (see [Models and Providers](models-and-providers.md#ai-functions)). |
 | Search public posts on X | **Research the web** for both, plus an xAI API key under **Integrations → X Search**. |
+| Search public posts on Threads | **Research the web** for both, plus a Threads connection with public search approval under **Integrations → Threads Search**. |
 | Working on a Task | **Read tasks**, **Execute assigned tasks** and **Send messages** for both the Agent and the person who starts it. |
 | Code work and draft pull requests | **Use a computer** for both, **Propose code changes** for the Agent, a Git connection, a repository environment and compute. See [Repositories](repositories.md). |
 | Reminders and recurring work | **Manage schedules**. See [Schedules](schedules.md). |
