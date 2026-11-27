@@ -3,6 +3,7 @@ import type { DropdownMenuItem } from '@nuxt/ui'
 import type { ChannelThreadDTO, MemberDTO, MessageDTO, TaskSourceLinkDTO } from '~~/shared/types'
 import { formatFullDateTime, formatMessageTime, formatTime } from '~~/shared/format'
 import { emojiName, isJumboEmoji } from '~~/shared/emoji'
+import { splitMailQuote } from '~~/shared/mail-quotes'
 import AttachmentGallery from '~/features/attachments/components/AttachmentGallery.vue'
 
 const props = defineProps<{
@@ -54,6 +55,9 @@ const editDraft = computed({
 
 /** In a Customer Conversation, a message without a delivery row: it stays with the team. */
 const note = computed(() => props.message.customer?.direction === null && !props.message.email && !props.message.deletedAt)
+const mailText = computed(() => props.message.email?.direction === 'inbound'
+  ? splitMailQuote(props.message.content)
+  : { body: props.message.content, quote: '' })
 const actionable = computed(() => !props.contextOnly && !props.message.deletedAt && !props.message.id.startsWith('tmp:'))
 const quickEmoji = computed(() => {
   const recent = Array.isArray(prefs.recentEmoji) ? prefs.recentEmoji : []
@@ -215,7 +219,11 @@ function taskLinkState(link: TaskSourceLinkDTO) {
         :class="[jumbo ? 'jumbo' : '', message.deliveryState === 'sending' || message.deliveryState === 'uploading' ? 'opacity-50' : '']"
         :aria-busy="message.deliveryState === 'sending' || undefined"
       >
-        <ChatMarkdownView :content="message.content" :names="names" :previews="message.author.kind === 'human' ? true : 'internal'" />
+        <ChatMarkdownView :content="mailText.body" :names="names" :previews="message.author.kind === 'human' ? true : 'internal'" :email-text="Boolean(message.email)" />
+        <details v-if="mailText.quote" class="mt-1 text-sm text-muted">
+          <summary class="w-fit cursor-pointer rounded text-xs hover:text-default">Quoted text</summary>
+          <ChatMarkdownView class="mt-1" :content="mailText.quote" email-text />
+        </details>
         <span v-if="streaming" class="inline-block h-4 w-0.5 animate-pulse bg-primary align-text-bottom" aria-label="Streaming" />
         <span v-if="message.editedAt" class="ms-1 select-none text-[11px] text-muted" :title="formatFullDateTime(message.editedAt)">(edited)</span>
       </div>

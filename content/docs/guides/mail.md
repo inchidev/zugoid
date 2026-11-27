@@ -23,8 +23,10 @@ In the same place you can set the **Display name** shown as the sender name, and
 
 ## Read mail
 
-Open **Customers** in the rail. Under **Contacts**, your Mailboxes are listed with their folders: **Inbox**, **Drafts**, **Sent**, **Archive**, **Spam** and **Trash**.
+Open **Customers** in the rail. Under **Contacts**, your Mailboxes are listed with **Inbox**, **Drafts**, **Sent**, **All mail**, **Archive**, **Spam** and **Trash**.
 
+- **All mail** shows incoming, outgoing and archived conversations in one list. Spam and Trash have their own lists.
+- **Sent** shows your Mailbox's latest outgoing email in each conversation. Open a conversation from either list to see its full history.
 - Search a folder by subject, address, sender name and the text of emails and internal notes.
 - Move a conversation with **Archive**, **Spam** or **Trash** in its header. Moving it changes it for everyone with the Mailbox, and needs a Read and send or Manage grant plus **Send email**.
 - New mail can reopen an archived conversation. Mail filed as Spam or Trash stays there.
@@ -47,8 +49,10 @@ You need a **Read and send** or **Manage** grant and **Send email** in your Role
 
 In a conversation, the composer at the bottom has two modes:
 
-- **Reply** sends an email. It goes to the sender (or their Reply-To address) by default; switch **Reply to sender** to **Reply all** to include everyone in To and Cc. You can edit the recipients before sending.
+- **Reply** sends an email to the sender or their Reply-To address. Select text in an email and choose **Quote selection** to include that excerpt in your reply.
 - **Internal note** adds a note for people who can open the Mailbox. It is never sent as email.
+
+Use **Quoted text** to expand earlier text included in an incoming email.
 
 **Forward** opens a new email that quotes the original and copies its attachments.
 

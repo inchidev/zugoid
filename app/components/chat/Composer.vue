@@ -476,7 +476,24 @@ function cancelReply() {
   ui.composerState(props.channelId).replyToId = null
 }
 
-defineExpose({ addFiles, focus })
+function appendQuote(text: string) {
+  if (props.disabled || recording.value) return
+  const reply = draft.value.trimEnd()
+  const quote = text.split(/\r?\n/u).map(line => line ? `> ${line}` : '>').join('\n')
+  const next = `${reply}\n\n${quote}`
+  if (next.length > MAX_LENGTH) {
+    toast.add({ title: 'Select less text to fit the reply', color: 'warning' })
+    return
+  }
+  draft.value = next
+  nextTick(() => {
+    focus()
+    textarea()?.setSelectionRange(reply.length, reply.length)
+    syncCaret()
+  })
+}
+
+defineExpose({ addFiles, appendQuote, focus })
 </script>
 
 <template>

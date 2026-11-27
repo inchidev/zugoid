@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { useEventListener } from '@vueuse/core'
 import type { ClientMsg, CustomerConversationDetailDTO, CustomerConversationStatus, MailMessageDTO, MemberDTO, MessageDTO } from '~~/shared/types'
 import { formatDateTime } from '~~/shared/format'
 import { errorMessage } from '~/composables/useApi'
@@ -62,8 +63,24 @@ const assignee = computed({
 
 const { send, retry } = useChannelSocket(computed(() => props.conversationId))
 const mode = ref<'reply' | 'note'>('reply')
-watch(() => props.conversationId, () => { mode.value = 'reply' })
+const pane = useTemplateRef('pane')
+const composer = useTemplateRef('composer')
+const selectedMailText = ref('')
+watch(() => props.conversationId, () => { mode.value = 'reply'; selectedMailText.value = '' })
 const where = computed(() => detail.value?.conversation.sourceKind === 'telegram' ? 'Telegram' : 'the chat on your site')
+
+if (import.meta.client) {
+  useEventListener(document, 'selectionchange', () => {
+    selectedMailText.value = ''
+    if (!detail.value?.email || !detail.value.canReply) return
+    const selection = window.getSelection()
+    if (!selection?.rangeCount || selection.isCollapsed) return
+    const common = selection.getRangeAt(0).commonAncestorContainer
+    const body = (common instanceof Element ? common : common.parentElement)?.closest('[data-email-text]')
+    // An email body is the only selectable source. Notes and selections across messages stay local.
+    if (body && pane.value?.contains(body)) selectedMailText.value = selection.toString().trim()
+  })
+}
 
 /** Retrying an email that failed to go out keeps its human confirmation for uncertain delivery. */
 const uncertainRetry = ref<MailMessageDTO | null>(null)
@@ -88,7 +105,7 @@ function onReply(id: string) {
 </script>
 
 <template>
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+  <div ref="pane" class="flex min-h-0 min-w-0 flex-1 flex-col">
     <template v-if="detail">
       <header class="df-top-row-min flex flex-wrap items-center gap-2 border-b border-default px-3 py-1">
         <UButton icon="i-ph-arrow-left" color="neutral" variant="ghost" square class="md:hidden" aria-label="Back to conversations" @click="emit('back')" />
@@ -144,7 +161,11 @@ function onReply(id: string) {
           />
           <span class="ms-2 truncate text-xs text-muted">{{ mode === 'reply' ? (detail.email ? 'Goes out as an email' : `Goes to ${where}`) : 'Only the team sees it' }}</span>
         </div>
+        <div v-if="detail.email && mode === 'reply' && selectedMailText" class="px-3 pt-1 sm:px-5">
+          <UButton label="Quote selection" icon="i-ph-quotes" size="xs" color="neutral" variant="ghost" @mousedown.prevent @click="composer?.appendQuote(selectedMailText)" />
+        </div>
         <ChatComposer
+          ref="composer"
           :channel-id="conversationId"
           :server-id="serverId"
           :members="members"

@@ -16,18 +16,22 @@ export function parseMailCursor(value: unknown): { at: string; id: string } | nu
 }
 
 const hasInbound = `EXISTS (SELECT 1 FROM email_messages em WHERE em.thread_channel_id = t.channel_id AND em.direction = 'inbound')`
-const lastSent = `(SELECT max(em.created_at) FROM email_messages em WHERE em.thread_channel_id = t.channel_id AND em.direction = 'outbound')`
+const latestOutgoing = `(SELECT em.message_id FROM email_messages em WHERE em.thread_channel_id = t.channel_id
+  AND em.direction = 'outbound' ORDER BY em.created_at DESC, em.message_id DESC LIMIT 1)`
+const latestMessage = `(SELECT m.id FROM messages m WHERE m.channel_id = t.channel_id ORDER BY m.created_at DESC, m.id DESC LIMIT 1)`
+const regularMail = `cc.status NOT IN ('spam', 'trash')`
 
 /**
  * What each folder lists, like Gmail:
  * - Inbox: conversations in the inbox that someone has written to you in. One you
  *   started appears once it gets a reply.
- * - Sent: every conversation you have sent email in, by when you last sent,
- *   whatever folder it is in except Spam and Trash.
+ * - Sent: conversations with outgoing email, sorted and previewed by their latest outgoing email.
+ * - All mail: conversations with incoming or outgoing email, including archived conversations.
  * - Archive, Spam, Trash: conversations moved there.
  */
 function folderQuery(folder: MailThreadFolder): { filter: string; sortAt: string } {
-  if (folder === 'sent') return { filter: `cc.status NOT IN ('spam', 'trash')`, sortAt: lastSent }
+  if (folder === 'sent') return { filter: regularMail, sortAt: 'pe.created_at' }
+  if (folder === 'all') return { filter: regularMail, sortAt: 'cc.last_message_at' }
   if (folder === 'inbox') return { filter: `${mailStatusFilterSql('cc', 'inbox')} AND ${hasInbound}`, sortAt: 'cc.last_message_at' }
   return { filter: mailStatusFilterSql('cc', folder), sortAt: 'cc.last_message_at' }
 }
@@ -59,7 +63,7 @@ export async function listMailThreads(
   const limit = Math.max(1, Math.min(Math.floor(input.limit ?? MAIL_THREAD_PAGE_SIZE), MAIL_THREAD_PAGE_SIZE))
   const cursor = parseMailCursor(input.before)
   const search = mailSearchTerm(input.search)
-  // The preview is the conversation's latest message.
+  const previewMessage = input.folder === 'sent' ? latestOutgoing : latestMessage
   const rows = await env.DB.prepare(
     `SELECT * FROM (
        SELECT t.channel_id as channelId, t.mailbox_channel_id as mailboxChannelId, t.subject, ${mailStatusSql('cc')} as status,
@@ -68,8 +72,7 @@ export async function listMailThreads(
          ${mailThreadUnreadSql('t', 'r')} as unread
        FROM email_threads t
        JOIN customer_conversations cc ON cc.channel_id = t.channel_id
-       LEFT JOIN messages p ON p.id =
-         (SELECT m.id FROM messages m WHERE m.channel_id = t.channel_id ORDER BY m.created_at DESC, m.id DESC LIMIT 1)
+       LEFT JOIN messages p ON p.id = ${previewMessage}
        LEFT JOIN email_messages pe ON pe.message_id = p.id
        LEFT JOIN channel_reads r ON r.channel_id = t.channel_id AND r.user_id = ?
        WHERE t.mailbox_channel_id = ? AND ${filter} AND ${searchFilter}

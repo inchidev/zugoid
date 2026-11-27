@@ -7,6 +7,7 @@ import type { MailboxDTO, MailMessageDTO, MailThreadDTO } from '../../shared/typ
 import { mailThreadUnreadSql, mailAddressList, mailboxGrantPermissionSql } from '../../shared/mail'
 import { readableMailContent } from '../../shared/mail-content'
 import { mailMarkdownText } from '../../shared/mail-html'
+import { splitMailQuote } from '../../shared/mail-quotes'
 import { getDb } from './db'
 import { mailStatusSql } from '../../workers/customer-records'
 import { emailDto, hydrateMessages } from './messages'
@@ -58,13 +59,14 @@ type ThreadRow = {
 }
 
 export function mailThreadDto(row: ThreadRow): MailThreadDTO {
+  const preview = row.preview ?? ''
   return {
     channelId: row.channelId,
     mailboxChannelId: row.mailboxChannelId,
     subject: row.subject,
     status: row.status,
     participants: mailAddressList(row.participantsJson),
-    preview: (row.previewInbound ? readableMailContent(row.preview ?? '') : row.previewMarkdown ? mailMarkdownText((row.preview ?? '').slice(0, 2_000)) : row.preview ?? '').slice(0, 240),
+    preview: (row.previewInbound ? splitMailQuote(readableMailContent(preview)).body : row.previewMarkdown ? mailMarkdownText(preview.slice(0, 2_000)) : preview).slice(0, 240),
     lastMessageAt: row.lastMessageAt,
     unread: Boolean(row.unread),
   }

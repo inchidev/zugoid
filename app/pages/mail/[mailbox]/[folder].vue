@@ -120,7 +120,7 @@ async function compose() {
     if (result.message.email?.deliveryStatus === 'failed') {
       toast.add({ title: 'Your email was saved but not delivered', description: result.message.email.deliveryError || 'You can retry it from the conversation.', color: 'error' })
     }
-    await navigateTo(mailPath(mailboxId, 'sent', result.threadId))
+    await navigateTo(mailPath(mailboxId, folder.value === 'all' ? 'all' : 'sent', result.threadId))
   }
   catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
   finally { sending.value = false }
@@ -217,7 +217,7 @@ function draftTitle(item: MailDraftDTO) {
   return item.subject.trim() || '(no subject)'
 }
 
-const folderLabel = computed(() => folder.value.charAt(0).toUpperCase() + folder.value.slice(1))
+const folderLabel = computed(() => folder.value === 'all' ? 'All mail' : folder.value.charAt(0).toUpperCase() + folder.value.slice(1))
 </script>
 
 <template>
