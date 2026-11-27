@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/vue-query'
 import { formatMessageTime } from '~~/shared/format'
 import { BOARD_ROUTE } from '~~/shared/paths'
 import { myTasks } from '~~/shared/project-navigation'
+import { taskStatusLabels } from '~~/shared/task-status'
 import type { TaskBoardDTO } from '~~/shared/types'
 
 definePageMeta({ layout: 'server', middleware: ['auth', 'manage-tasks'] })
@@ -20,7 +21,6 @@ const sections = computed(() => [
   { key: 'review', title: 'Waiting for your review', rows: tasks.value.review },
 ].filter(section => section.rows.length))
 const placeOf = (board: TaskBoardDTO) => board.name
-const statusLabels: Record<string, string> = { backlog: 'Backlog', ready: 'Ready', review: 'Review', done: 'Done', failed: 'Failed' }
 </script>
 
 <template>
@@ -40,7 +40,7 @@ const statusLabels: Record<string, string> = { backlog: 'Backlog', ready: 'Ready
                   <span class="block truncate text-sm font-medium text-highlighted"><span class="me-1 font-normal text-muted">#{{ task.number }}</span>{{ task.title }}</span>
                   <span class="block truncate text-xs text-muted">{{ placeOf(board) }}<template v-if="task.dueAt"> · Due {{ formatMessageTime(task.dueAt) }}</template></span>
                 </span>
-                <UBadge :label="statusLabels[task.status] ?? task.status" color="neutral" variant="subtle" size="sm" class="shrink-0" />
+                <UBadge :label="taskStatusLabels[task.status] ?? task.status" color="neutral" variant="subtle" size="sm" class="shrink-0" />
               </NuxtLink>
             </li>
           </ul>

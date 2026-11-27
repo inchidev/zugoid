@@ -42,6 +42,21 @@ it('explains that agent assignment waits for an explicit start rather than looki
   expect(view.findAll('button').some(b => b.text() === 'Run assigned agent')).toBe(true)
 })
 
+it('offers In progress between Ready and Review and moves tasks there from the board', async () => {
+  await render()
+  const columns = view.findAll('[data-column]').map(column => column.attributes('data-column'))
+  expect(columns).toEqual(['backlog', 'ready', 'in_progress', 'review', 'done', 'failed'])
+  const card = view.get('[data-column="ready"] article')
+  expect(card.get('option[value="in_progress"]').text()).toBe('In progress')
+  await card.get('select').setValue('in_progress')
+  await flushPromises()
+  expect(api).toHaveBeenCalledWith('/api/tasks/task', { method: 'PATCH', body: { status: 'in_progress' } })
+  await card.trigger('dragstart')
+  await view.get('[data-column="in_progress"]').trigger('drop')
+  await flushPromises()
+  expect(api).toHaveBeenCalledWith('/api/boards/board/tasks/reorder', { method: 'PATCH', body: { taskId: 'task', status: 'in_progress', beforeTaskId: null } })
+})
+
 it('creates and starts an assigned task only through the explicit Create and run action', async () => {
   await render()
   await view.get('[aria-label="New task"]').trigger('click')

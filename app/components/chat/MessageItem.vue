@@ -136,6 +136,7 @@ function taskLinkState(link: TaskSourceLinkDTO) {
   return ({
     backlog: { label: 'Backlog', class: '' },
     ready: { label: 'Ready', class: '' },
+    in_progress: { label: 'In progress', class: 'text-default' },
     review: { label: 'In review', class: 'text-default' },
     done: { label: 'Done', class: 'text-success' },
     failed: { label: 'Failed', class: 'text-error' },

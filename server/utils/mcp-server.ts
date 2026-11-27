@@ -8,6 +8,7 @@ import { listDocumentRevisions, restoreDocumentRevision } from './document-revis
 import { listAuthorizedTables } from './table-catalog'
 import { taskFrameContent } from './task-recordings'
 import { TASK_RECORDINGS_MCP_INSTRUCTIONS } from '../../shared/task-recordings'
+import { taskStatuses } from '../../shared/task-status'
 import { toolPaused } from '../../shared/features'
 import { McpServer, createMcpHandler, hostHeaderValidationResponse, originValidationResponse } from '@modelcontextprotocol/server'
 import { z } from 'zod'
@@ -71,7 +72,7 @@ export function mcpOutput(value: unknown, origin = ''): unknown {
 
 const dueAtSchema = z.string().refine(value => !Number.isNaN(Date.parse(value)), 'Invalid due date').nullable()
 const prioritySchema = z.enum(['low', 'normal', 'high', 'urgent'])
-const statusSchema = z.enum(['backlog', 'ready', 'review', 'done', 'failed'])
+const statusSchema = z.enum(taskStatuses)
 const taskReferenceSchema = z.union([z.string().trim().min(1), z.number().int().positive()])
 
 type ResearchToolName = 'search_threads' | 'search_instagram' | 'search_tiktok_trends'
@@ -216,7 +217,7 @@ export function createZugoidMcpServer({ env, principal, schedule, origin = '' }:
   })
 
   tool('create_task', {
-    description: 'Create a task on a Zugoid task board. Unassigned tasks start in backlog; assigned tasks start ready.',
+    description: 'Create a task in backlog on a Zugoid task board, with or without an assignee.',
     inputSchema: {
       boardId: z.string().min(8),
       title: z.string().trim().min(1).max(160),

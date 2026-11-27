@@ -102,15 +102,33 @@ export async function testMcpOAuth({ api, runtimes, origins, ids, cookies, membe
   }
   const board = await api('alpha', `/api/servers/${ids.alpha}/boards`, { method: 'POST', body: { name: 'OAuth integration' } })
   const boardId = board.payload.board.id
-  const created = await mcp(exchanged.payload.access_token, 'create_task', { boardId, title: 'OAuth integration task' })
-  assert.equal(created.response.status, 200, JSON.stringify(created.payload))
-  assert.ok(!created.payload.result.isError, JSON.stringify(created.payload))
-  const task = JSON.parse(created.payload.result.content[0].text).task
+  async function taskTool(name, args) {
+    const { response, payload } = await mcp(exchanged.payload.access_token, name, args)
+    assert.equal(response.status, 200, JSON.stringify(payload))
+    assert.ok(!payload.result.isError, JSON.stringify(payload))
+    return JSON.parse(payload.result.content[0].text)
+  }
+  const { task } = await taskTool('create_task', { boardId, title: 'OAuth integration task', assigneeId: owner })
   assert.equal(task.createdBy, 'oauth-test-agent')
+  assert.equal(task.assigneeId, owner)
+  assert.equal(task.status, 'backlog')
   const audit = await db.prepare("SELECT actor_id,meta_json FROM audit_log WHERE action='task.create' AND target_id=?").bind(task.id).first()
   assert.equal(audit.actor_id, 'oauth-test-agent')
   assert.equal(JSON.parse(audit.meta_json).delegatedBy, owner)
   assert.equal(JSON.parse(audit.meta_json).clientId, clientId)
+  const update = async fields => (await taskTool('update_task', { taskId: task.id, ...fields })).task
+  assert.equal((await update({ assigneeId: null })).status, 'backlog')
+  assert.equal((await update({ assigneeId: owner })).status, 'backlog')
+  assert.equal((await update({ status: 'in_progress' })).status, 'in_progress')
+  assert.equal((await update({ assigneeId: null })).status, 'in_progress')
+  const taskPath = `/api/tasks/${task.id}`
+  const reviewed = await api('alpha', taskPath, { method: 'PATCH', body: { status: 'review' } })
+  assert.equal(reviewed.payload.task.status, 'review')
+  const moved = await api('alpha', taskPath, { method: 'PATCH', body: { status: 'in_progress' } })
+  assert.equal(moved.payload.task.status, 'in_progress')
+  await api('alpha', `/api/boards/${boardId}/tasks/reorder`, { method: 'PATCH', body: { taskId: task.id, status: 'ready' } })
+  await api('alpha', `/api/boards/${boardId}/tasks/reorder`, { method: 'PATCH', body: { taskId: task.id, status: 'in_progress' } })
+  assert.ok((await taskTool('list_tasks', { status: 'in_progress' })).tasks.some(row => row.id === task.id))
   // The connection was granted Task scopes only.
   assert.equal((await mcp(exchanged.payload.access_token, 'list_channels')).payload.result.isError, true)
   assert.equal((await mcp(exchanged.payload.access_token, 'list_task_boards', {}, 'beta')).response.status, 401)

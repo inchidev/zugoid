@@ -1,4 +1,5 @@
 import { getServerId } from '../../../shared/server-id'
+import { taskStatuses } from '../../../shared/task-status'
 import { z } from 'zod'
 import { cf } from '../../utils/cf'
 import { requireMember } from '../../utils/guards'
@@ -9,7 +10,7 @@ const bodySchema = z.object({
   parentTaskId: z.string().min(8).nullable().optional(),
   title: z.string().trim().min(1).max(160).optional(),
   description: z.string().trim().max(12_000).optional(),
-  status: z.enum(['backlog', 'ready', 'review', 'done', 'failed']).optional(),
+  status: z.enum(taskStatuses).optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   dueAt: z.string().refine(value => !Number.isNaN(Date.parse(value)), 'Invalid due date').nullable().optional(),
   position: z.number().int().min(0).optional(),

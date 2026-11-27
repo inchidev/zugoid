@@ -71,7 +71,7 @@ it('removes the agent for new work, stops its work and keeps its history', async
   expect(db.prepare('SELECT id,status,assignee_id FROM tasks ORDER BY id').all()).toEqual([
     { id: 'done-task', status: 'done', assignee_id: 'target-agent' },
     { id: 'other-task', status: 'ready', assignee_id: 'other-agent' },
-    { id: 'ready-task', status: 'backlog', assignee_id: null },
+    { id: 'ready-task', status: 'ready', assignee_id: null },
     { id: 'review-task', status: 'review', assignee_id: null },
   ])
   // Messages and DM membership stay; the DM becomes read-only through the existing removed-member rule.

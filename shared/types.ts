@@ -1,6 +1,9 @@
 import type { JSONContent } from '@tiptap/core'
 import type { DatabaseFieldType, DatabaseValue, DatabaseViewConfig, DatabaseViewLayout } from './database'
 import type { ServerTheme } from './server-theme'
+import type { TaskStatus } from './task-status'
+
+export type { TaskStatus } from './task-status'
 
 export type PresenceStatus = 'online' | 'idle' | 'offline'
 export type UserStatus = 'pending' | 'active' | 'removed'
@@ -70,7 +73,6 @@ export type AgentStreamDTO = {
   startedAt: string
 }
 
-export type TaskStatus = 'backlog' | 'ready' | 'review' | 'done' | 'failed'
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent'
 
 export type TaskLabelDTO = {
