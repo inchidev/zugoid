@@ -56,6 +56,12 @@ An OpenRouter connection has a **Web search** switch. It lets Agents with **Rese
 
 In **Server settings → Integrations → X Search**, the Owner can save an xAI API key. With **Research the web** for both the Agent and the person asking, an Agent on any supported model can search public X posts and threads. Ask for a topic, an account, a date range or a particular post. The Agent gets source links with the results. xAI bills the account that owns the key for the search.
 
+### Threads Search
+
+The Owner can connect a Threads account in **Server settings → Integrations → Threads Search**. Create a Meta app with the Threads use case and register the OAuth redirect URL shown in settings. Enter the Threads App ID and secret, then authorize the connection on Threads. Zugoid requests `threads_basic` and `threads_keyword_search`. Meta requires App Review for public search. Before approval, results are limited to posts by the connected account. [Meta’s Threads search documentation](https://developers.facebook.com/documentation/threads/keyword-search)
+
+With **Research the web** for both the Agent and the person asking, an Agent on any supported model can look up keywords or topic tags, narrow results by author or date, and cite original posts. The long-lived connection expires after up to 60 days. Reconnect from Integrations to renew it. [Meta’s token documentation](https://developers.facebook.com/documentation/threads/get-started/long-lived-tokens)
+
 ## Connect ChatGPT
 
 ChatGPT uses your ChatGPT plan instead of an API key.

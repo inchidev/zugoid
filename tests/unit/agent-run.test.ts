@@ -8,6 +8,7 @@ import { agentGateway } from '../../server/utils/agent-gateway'
 import { agentTools, executeRunTool } from '../../server/utils/agent-tools'
 import { saveAgentProvider } from '../../server/utils/agent-providers'
 import { updateIntegrations } from '../../server/utils/integrations'
+import { beginThreadsConnection, completeThreadsConnection, disconnectThreads } from '../../server/utils/threads-connection'
 import { writeServerSetting } from '../../shared/server-settings'
 import { ALL_PERMISSIONS, Permission } from '../../shared/permissions'
 import type { ZugoidEnv } from '../../workers/env'
@@ -189,6 +190,72 @@ describe('Pi run authorization', () => {
 
       await updateIntegrations(env, { values: { XAI_API_KEY: null } })
       expect((await (await search('x-disconnected')).json()).tools).not.toEqual(expect.arrayContaining([xTool]))
+    } finally { transport.mockRestore() }
+  })
+
+  it('discovers and calls Threads Search on any model with Research the web', async () => {
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')
+    const run = await createAgentRun(env, (await start())!, input())
+    expect(run.model).toBe('@cf/test')
+    db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+    const token = await runCapability(env, run.id)
+    const call = (callId: string, name: string, args: unknown) => agentGateway(new Request('http://server/tools', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ callId, name, arguments: args }),
+    }), env, run.id, 'tools', () => {})
+    const search = (id: string) => call(id, 'search_tools', { query: 'search_threads' })
+    const threadsTool = expect.objectContaining({ name: 'search_threads', cost: 'network' })
+    expect((await (await search('threads-disabled')).json()).tools).not.toEqual(expect.arrayContaining([threadsTool]))
+
+    const transport = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-short-token' }))
+      .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-long-token', expires_in: 5184000 }))
+    try {
+      const owner = { serverId, userId: 'owner-user' }
+      const authorization = new URL(await beginThreadsConnection(env, owner, 'https://zugoid.example', { appId: '1234', appSecret: 'synthetic-app-secret' }))
+      const callback = new URL(authorization.searchParams.get('redirect_uri')!)
+      callback.searchParams.set('state', authorization.searchParams.get('state')!)
+      callback.searchParams.set('code', 'synthetic-code')
+      expect(await completeThreadsConnection(env, owner, callback)).toBe('connected')
+      expect(await (await search('threads-enabled')).json()).toMatchObject({ tools: expect.arrayContaining([threadsTool]) })
+      transport.mockClear()
+      transport.mockImplementationOnce(async (request, init) => {
+        const url = new URL(String(request))
+        expect(url.origin + url.pathname).toBe('https://graph.threads.com/v1.0/keyword_search')
+        expect(Object.fromEntries(url.searchParams)).toEqual({
+          q: 'Game dev', search_mode: 'TAG', search_type: 'RECENT', author_username: 'zugoid',
+          since: '2026-01-01', until: '2026-01-02', fields: 'text,username,permalink,timestamp', limit: '12',
+        })
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer synthetic-long-token')
+        expect(init?.redirect).toBe('manual')
+        return Response.json({
+          data: [
+            { permalink: 'https://www.threads.net/@zugoid/post/ABC?tracking=123', username: 'zugoid', text: 'A public post.', timestamp: '2026-01-01T15:00:00+0000' },
+            { permalink: 'https://www.threads.com/@zugoid/post/ABC', text: 'Duplicate' },
+            { permalink: 'https://www.threads.com.example.net/@zugoid/post/DEF', text: 'Foreign link' },
+          ],
+          paging: { next: 'https://graph.threads.com/keyword_search?access_token=synthetic-long-token' },
+        })
+      })
+      const args = { query: 'Game dev', mode: 'tag', sort: 'recent', author: '@zugoid', since: '2026-01-01', until: '2026-01-02' }
+      const result = await call('threads-search', 'search_threads', args)
+      expect(result.status).toBe(200)
+      const body = await result.json()
+      expect(body.posts).toEqual([{ url: 'https://www.threads.com/@zugoid/post/ABC', author: 'zugoid', text: 'A public post.', timestamp: '2026-01-01T15:00:00+0000' }])
+      expect(JSON.stringify(body)).not.toContain('synthetic-long-token')
+      expect((await findAgentRun(env, run.id))?.modelCalls).toBe(0)
+      expect((await call('threads-invalid', 'search_threads', { ...args, until: args.since })).ok).toBe(false)
+
+      transport.mockResolvedValueOnce(Response.json({ error: { code: 190, message: 'upstream diagnostics with secret' } }, { status: 400 }))
+      const invalidToken = await call('threads-expired', 'search_threads', args)
+      expect(invalidToken.status).toBe(409)
+      expect(JSON.stringify(await invalidToken.json())).not.toContain('upstream diagnostics')
+
+      db.prepare('UPDATE agent_runs SET private_at=? WHERE id=?').run(new Date().toISOString(), run.id)
+      expect((await call('threads-after-private', 'search_threads', args)).status).toBe(403)
+      expect(transport).toHaveBeenCalledTimes(2)
+      await disconnectThreads(env)
+      expect((await (await search('threads-disconnected')).json()).tools).not.toEqual(expect.arrayContaining([threadsTool]))
     } finally { transport.mockRestore() }
   })
 

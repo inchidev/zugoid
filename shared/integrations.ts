@@ -32,6 +32,7 @@ export const offCloudflareKeys: IntegrationKey[] = integrationKeys.filter(key =>
 export type IntegrationFieldStatus = { source: 'deployment' | 'settings' | null; value: string | null }
 export type IntegrationsDTO = {
   cloudflareNetwork: boolean
+  threads: { callbackUrl: string; expiresAt: string | null; expired: boolean }
   fields: Partial<Record<IntegrationKey, IntegrationFieldStatus>>
   status: { search: 'exa' | 'openrouter' | null; pages: string | null; outbound: string | null; inbound: string | null; calls: string | null }
   webhooks: { bridge: string; postmark: string; mailgun: string; ses: string }

@@ -41,6 +41,8 @@ Add whatever else it should be able to do, for example reading Tasks. People who
 
 Each webhook request carries a **Run credential** in `server.credential.token`. Send it as a bearer token to `server.mcp` for everything the Agent does for that Run: reading, replying and `complete_run`. It acts as the Agent for that Run only, with the Run's own permissions: the Agent's Role, narrowed to what the person who asked may do, and it stops working when the Run closes or at `expiresAt`. Nothing needs to be created for it.
 
+An external Agent can use `search_threads` with that Run credential when the Server has [Threads Search](models-and-providers.md#threads-search) connected and both the Agent and the person asking have **Research the web**. Search before using tools that access Server data, so private content stays on the Server. The Agent gets post text and links to cite in its reply.
+
 A standing credential is needed only for work outside a Run, such as reading on its own schedule. It acts as the Agent within its Role and within the permissions of the person who created it, for whoever wakes the Agent, so prefer the Run credential wherever a Run exists.
 
 - **Access token:** as Owner, open **User Settings → Connections → Tokens**, choose the Agent under **Acts as**, select the scopes and select **Create access token**. Give the Agent the token and your Server's `/mcp` URL.

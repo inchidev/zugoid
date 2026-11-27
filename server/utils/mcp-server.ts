@@ -29,6 +29,14 @@ import {
   listMemberMailboxes, listMemberMailThreads, markMemberMailThreadRead, moveMemberMailThread, readMemberMailThread, requireMailMember,
 } from './mail-service'
 import { authorizeToolCall } from './tool-authorization'
+import { newId, nowIso } from '../../shared/ids'
+import type { RunMandate } from '../../shared/agent-execution'
+import { findAgentRun } from './agent-run-service'
+import { toolSecurityReason } from './agent-tool-security'
+import { executeRunTool } from './agent-tools'
+import { threadsSearchDescription, threadsSearchInput } from './agent-threads-search'
+import { loadThreadsConnection } from './threads-connection'
+import { runIdOfCredential } from './mcp-run-credential'
 
 type McpServerContext = {
   env: ZugoidEnv
@@ -67,14 +75,32 @@ const taskReferenceSchema = z.union([z.string().trim().min(1), z.number().int().
  * Serves one stateless MCP HTTP request. Only this Server's own hostname may appear in
  * Host and Origin, which keeps DNS-rebound and cross-site pages off the endpoint.
  */
-export function serveMcpRequest(request: Request, context: McpServerContext): Promise<Response> {
+export async function serveMcpRequest(request: Request, context: McpServerContext): Promise<Response> {
   const hostname = new URL(request.url).hostname
   const rejected = hostHeaderValidationResponse(request, [hostname]) ?? originValidationResponse(request, [hostname])
-  if (rejected) return Promise.resolve(rejected)
-  return createMcpHandler(() => createZugoidMcpServer(context)).fetch(request)
+  if (rejected) return rejected
+  const { env, principal } = context
+  const runId = runIdOfCredential(principal.authorization.credential.id)
+  let threadsRunId: string | null = null
+  let threadsAvailable = false
+  if (runId) {
+    try {
+      authorizeToolCall(principal.authorization, 'search_threads')
+      threadsRunId = runId
+    } catch { /* Only the external Agent's authorized Run can use the Server's Threads connection. */ }
+    if (threadsRunId) {
+      const [run, connection] = await Promise.all([findAgentRun(env, threadsRunId), loadThreadsConnection(env)])
+      threadsAvailable = Boolean(run && run.status === 'running' && run.deadline > nowIso()
+        && connection && connection.expiresAt > Date.now()
+        && !toolSecurityReason('search_threads', false, (JSON.parse(run.mandateJson) as RunMandate).execution?.mode))
+    }
+  }
+  return createMcpHandler(() => createZugoidMcpServer(context, threadsRunId, threadsAvailable, request.signal)).fetch(request)
 }
 
-export function createZugoidMcpServer({ env, principal, schedule, origin = '' }: McpServerContext): McpServer {
+export function createZugoidMcpServer(
+  { env, principal, schedule, origin = '' }: McpServerContext, threadsRunId: string | null = null, threadsAvailable = false, signal?: AbortSignal,
+): McpServer {
   const server = new McpServer({ name: 'Zugoid', version: packageVersion }, { instructions: TASK_RECORDINGS_MCP_INSTRUCTIONS })
   const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(mcpOutput(value, origin), null, 2) }] })
   const dataResult = async (work: () => Promise<unknown>) => {
@@ -91,8 +117,21 @@ export function createZugoidMcpServer({ env, principal, schedule, origin = '' }:
       const refused = error && typeof error === 'object' && 'data' in error ? (error as { data: { error: unknown } }).data.error : { code: 'forbidden', message: 'Not permitted' }
       return { ...result({ error: refused }), isError: true }
     }
+    // Existing MCP tools can return Server data without going through the Run tool broker.
+    // Record that before invoking them so a subsequent search cannot send that data to Threads.
+    if (threadsRunId && name !== 'search_threads' && name !== 'complete_run') {
+      await env.DB.prepare('UPDATE agent_runs SET private_at=COALESCE(private_at,?) WHERE id=?')
+        .bind(nowIso(), threadsRunId).run()
+    }
     return handler(...args)
   }) as never)) as unknown as McpServer['registerTool']
+
+  if (threadsRunId && threadsAvailable) tool('search_threads', {
+    description: threadsSearchDescription,
+    inputSchema: threadsSearchInput,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, async input => dataResult(() => executeRunTool(env, threadsRunId, { callId: newId(), name: 'search_threads', arguments: input }, schedule, signal)))
+
   if (!toolPaused('list_tables')) tool('list_tables', {
     description: 'Discover authorized table IDs, names, fields and views before reading records. Requires data:read.',
     inputSchema: {},

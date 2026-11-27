@@ -90,6 +90,8 @@ async function copy(text: string) {
         <UButton label="Save" :loading="busy === 'x-search'" :disabled="Boolean(busy) || !draft.XAI_API_KEY?.trim()" @click="save('x-search', ['XAI_API_KEY'])" />
       </article>
 
+      <SettingsThreadsIntegration :server-id="serverId" :connection="data.threads" @changed="query.refetch()" />
+
       <article class="space-y-3 rounded-lg border border-default p-4">
         <div class="flex flex-wrap items-center gap-2"><h3 class="flex-1 font-medium">Reading web pages</h3><UBadge :label="statusLabel(data.status.pages)" color="neutral" variant="subtle" /></div>
         <template v-if="data.cloudflareNetwork">
