@@ -27,6 +27,7 @@ Open **Customers** in the rail. Under **Contacts**, your Mailboxes are listed wi
 
 - **All mail** shows incoming, outgoing and archived conversations in one list. Spam and Trash have their own lists.
 - **Sent** shows your Mailbox's latest outgoing email in each conversation. Open a conversation from either list to see its full history.
+- Select **Refresh mail** beside **Compose** to reload the current folder and its unread counts.
 - Search a folder by subject, address, sender name and the text of emails and internal notes.
 - Move a conversation with **Archive**, **Spam** or **Trash** in its header. Moving it changes it for everyone with the Mailbox, and needs a Read and send or Manage grant plus **Send email**.
 - New mail can reopen an archived conversation. Mail filed as Spam or Trash stays there.
