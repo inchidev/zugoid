@@ -11,6 +11,7 @@ const gateway = z.string().trim().max(2048).refine(https, 'Enter a complete http
  */
 export const integrationFields = {
   EXA_API_KEY: { schema: secret(8), secret: true },
+  XAI_API_KEY: { schema: secret(8), secret: true },
   BROWSER_CDP_URL: { schema: z.string().trim().max(2048).refine(cdp, 'Enter an http(s) or ws(s) address'), secret: true },
   CLOUDFLARE_ACCOUNT_ID: { schema: z.string().trim().regex(/^[0-9a-f]{32}$/iu, 'An account ID has 32 hexadecimal characters'), secret: false },
   CLOUDFLARE_API_TOKEN: { schema: secret(32), secret: true },
@@ -26,7 +27,7 @@ export const integrationFields = {
 export type IntegrationKey = keyof typeof integrationFields
 export const integrationKeys = Object.keys(integrationFields) as IntegrationKey[]
 /** What only makes sense where the Server is not already on Cloudflare's network. */
-export const offCloudflareKeys: IntegrationKey[] = integrationKeys.filter(key => key !== 'EXA_API_KEY')
+export const offCloudflareKeys: IntegrationKey[] = integrationKeys.filter(key => key !== 'EXA_API_KEY' && key !== 'XAI_API_KEY')
 
 export type IntegrationFieldStatus = { source: 'deployment' | 'settings' | null; value: string | null }
 export type IntegrationsDTO = {

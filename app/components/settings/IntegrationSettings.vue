@@ -84,6 +84,13 @@ async function copy(text: string) {
       </article>
 
       <article class="space-y-3 rounded-lg border border-default p-4">
+        <div class="flex flex-wrap items-center gap-2"><h3 class="flex-1 font-medium">X Search</h3><UBadge :label="field('XAI_API_KEY')?.source ? 'On: xAI' : 'Off'" color="neutral" variant="subtle" /></div>
+        <p class="text-sm text-muted">Agents with Research the web can search public posts and threads on X. xAI bills the account that owns this API key.</p>
+        <SettingsIntegrationField v-model="draft.XAI_API_KEY" label="xAI API key" :status="field('XAI_API_KEY')" :busy="busy === 'remove-XAI_API_KEY'" @remove="remove('XAI_API_KEY')" />
+        <UButton label="Save" :loading="busy === 'x-search'" :disabled="Boolean(busy) || !draft.XAI_API_KEY?.trim()" @click="save('x-search', ['XAI_API_KEY'])" />
+      </article>
+
+      <article class="space-y-3 rounded-lg border border-default p-4">
         <div class="flex flex-wrap items-center gap-2"><h3 class="flex-1 font-medium">Reading web pages</h3><UBadge :label="statusLabel(data.status.pages)" color="neutral" variant="subtle" /></div>
         <template v-if="data.cloudflareNetwork">
           <p class="text-sm text-muted">{{ data.status.pages ? 'This Server reads pages with Cloudflare Browser Run. There is nothing to set up.' : 'This Server has no Browser Run binding. Update it from Deployment to add one.' }}</p>

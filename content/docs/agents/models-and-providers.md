@@ -52,6 +52,10 @@ An Exa key is the other way to search. Enter it in **Server settings → Integra
 
 An OpenRouter connection has a **Web search** switch. It lets Agents with **Research the web** search through OpenRouter. Additional OpenRouter charges apply. To use it, assign a model that supports tool calls to the **Web search** AI function (see below). If a previously assigned model is marked **Unavailable**, choose one that supports tool calls.
 
+### X Search
+
+In **Server settings → Integrations → X Search**, the Owner can save an xAI API key. With **Research the web** for both the Agent and the person asking, an Agent on any supported model can search public X posts and threads. Ask for a topic, an account, a date range or a particular post. The Agent gets source links with the results. xAI bills the account that owns the key for the search.
+
 ## Connect ChatGPT
 
 ChatGPT uses your ChatGPT plan instead of an API key.
