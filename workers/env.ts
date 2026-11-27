@@ -40,6 +40,8 @@ export type ZugoidEnv = {
   XAI_API_KEY?: string
   INSTAGRAM_ACCOUNT_ID?: string
   INSTAGRAM_USER_ACCESS_TOKEN?: string
+  TIKTOK_ADVERTISER_ID?: string
+  TIKTOK_ADVERTISER_ACCESS_TOKEN?: string
 
   DB: D1Database
   BACKUPS?: R2Bucket

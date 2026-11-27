@@ -324,6 +324,73 @@ describe('Pi run authorization', () => {
     } finally { transport.mockRestore() }
   })
 
+  it('finds TikTok trending video links through the authorized Run', async () => {
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')
+    const run = await createAgentRun(env, (await start())!, input())
+    expect(run.model).toBe('@cf/test')
+    db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+    const token = await runCapability(env, run.id)
+    const call = (callId: string, name: string, args: unknown) => agentGateway(new Request('http://server/tools', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ callId, name, arguments: args }),
+    }), env, run.id, 'tools', () => {})
+    const discover = async (id: string) => (await call(id, 'search_tools', { query: 'search_tiktok_trends' })).json()
+    const tool = expect.objectContaining({ name: 'search_tiktok_trends', cost: 'network' })
+    expect((await discover('tt-disabled')).tools).not.toEqual(expect.arrayContaining([tool]))
+
+    const advertiserId = '7123412341234123412'
+    await updateIntegrations(env, { values: { TIKTOK_ADVERTISER_ID: advertiserId, TIKTOK_ADVERTISER_ACCESS_TOKEN: 'synthetic-tiktok-token' } })
+    expect(await discover('tt-enabled')).toMatchObject({ tools: expect.arrayContaining([tool]) })
+    const params = { advertiser_id: advertiserId, discovery_type: 'HASHTAG', country_code: 'GB', date_range: '30DAY' }
+    const hashtag = { hashtag_id: '4268426520694', hashtag_name: 'GameDev', top_country_list: ['GB', 'US'] }
+    const transport = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request, init) => {
+      const url = new URL(String(request))
+      expect(url.origin).toBe('https://business-api.tiktok.com')
+      expect(new Headers(init?.headers).get('Access-Token')).toBe('synthetic-tiktok-token')
+      expect(init?.redirect).toBe('manual')
+      if (url.pathname === '/open_api/v1.3/discovery/trending_list/') {
+        expect(Object.fromEntries(url.searchParams)).toEqual(params)
+        return Response.json({ code: 0, data: { list: [hashtag] } })
+      }
+      expect(url.pathname).toBe('/open_api/v1.3/discovery/video_list/')
+      expect(Object.fromEntries(url.searchParams)).toEqual({ ...params, hashtag_ids: '["4268426520694"]' })
+      return Response.json({ code: 0, data: { list: [{
+        hashtag_id: hashtag.hashtag_id,
+        top_video_list: [
+          { video_id: '7123412341234123413', share_url: 'https://www.tiktok.com/@studio/video/7123412341234123413?token=tracking' },
+          { video_id: '7123412341234123413', share_url: 'https://www.tiktok.com/@studio/video/7123412341234123413' },
+          { video_id: '7123412341234123414', share_url: 'https://www.tiktok.com.example.org/@studio/video/7123412341234123414' },
+          { video_id: 'not-an-id' },
+        ],
+      }] } })
+    })
+    try {
+      const args = { hashtag: '#gamedev', country: 'GB', dateRange: '30DAY' }
+      expect((await call('tt-invalid', 'search_tiktok_trends', { hashtag: '#a #b' })).ok).toBe(false)
+      const response = await call('tt-search', 'search_tiktok_trends', args)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        hashtag: 'gamedev', country: 'GB', dateRange: '30DAY',
+        videos: [{ url: 'https://www.tiktok.com/@studio/video/7123412341234123413' }, { url: 'https://www.tiktok.com/player/v1/7123412341234123414' }],
+      })
+      expect((await findAgentRun(env, run.id))?.modelCalls).toBe(0)
+
+      transport.mockResolvedValueOnce(Response.json({ code: 0, data: { list: [] } }))
+      expect(await (await call('tt-no-trend', 'search_tiktok_trends', { hashtag: 'missing' })).json()).toMatchObject({ videos: [], notice: expect.stringContaining('trending list') })
+      transport.mockResolvedValueOnce(Response.json({ code: 0, data: { list: [{ ...hashtag, top_country_list: ['US'] }] } }))
+      expect(await (await call('tt-region', 'search_tiktok_trends', args)).json()).toMatchObject({ videos: [], availableCountries: ['US'] })
+      transport.mockResolvedValueOnce(Response.json({ code: 40105, message: 'upstream diagnostics with secret' }))
+      const revoked = await call('tt-revoked', 'search_tiktok_trends', args)
+      expect(revoked.status).toBe(409)
+      expect(JSON.stringify(await revoked.json())).not.toContain('upstream diagnostics')
+      db.prepare('UPDATE agent_runs SET private_at=? WHERE id=?').run(new Date().toISOString(), run.id)
+      expect((await call('tt-private', 'search_tiktok_trends', args)).status).toBe(403)
+      expect(transport).toHaveBeenCalledTimes(5)
+      await updateIntegrations(env, { values: { TIKTOK_ADVERTISER_ACCESS_TOKEN: null } })
+      expect((await discover('tt-disconnected')).tools).not.toEqual(expect.arrayContaining([tool]))
+    } finally { transport.mockRestore() }
+  })
+
   it('watches a bounded YouTube clip through Gemini from a Run using another model', async () => {
     db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
     await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')

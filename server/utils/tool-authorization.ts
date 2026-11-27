@@ -51,7 +51,8 @@ export const TOOL_RULES: Readonly<Record<string, ToolRule>> = {
   create_app_draft: { actions: [A.manageGadgets] }, update_app_draft: { actions: [A.manageGadgets] },
   // The web.
   read_url: { actions: [A.browseWeb] }, search_web: { actions: [A.browseWeb] }, search_x: { actions: [A.browseWeb] },
-  search_threads: { actions: [A.browseWeb] }, search_instagram: { actions: [A.browseWeb] }, watch_youtube: { actions: [A.browseWeb] },
+  search_threads: { actions: [A.browseWeb] }, search_instagram: { actions: [A.browseWeb] },
+  search_tiktok_trends: { actions: [A.browseWeb] }, watch_youtube: { actions: [A.browseWeb] },
   // Schedules.
   create_reminder: { actions: [A.manageSchedules] }, update_reminder: { actions: [A.manageSchedules] },
   prepare_work_schedule: { principal: 'agent' },

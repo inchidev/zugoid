@@ -14,6 +14,8 @@ export const integrationFields = {
   XAI_API_KEY: { schema: secret(8), secret: true },
   INSTAGRAM_ACCOUNT_ID: { schema: z.string().trim().regex(/^[1-9]\d{0,31}$/u, 'Enter the numeric Instagram professional account ID'), secret: false },
   INSTAGRAM_USER_ACCESS_TOKEN: { schema: secret(8).regex(/^[!-~]+$/u, 'Enter a Facebook User access token'), secret: true },
+  TIKTOK_ADVERTISER_ID: { schema: z.string().trim().regex(/^[1-9]\d{0,31}$/u, 'Enter the numeric TikTok advertiser ID'), secret: false },
+  TIKTOK_ADVERTISER_ACCESS_TOKEN: { schema: secret(8).regex(/^[!-~]+$/u, 'Enter a TikTok advertiser access token'), secret: true },
   BROWSER_CDP_URL: { schema: z.string().trim().max(2048).refine(cdp, 'Enter an http(s) or ws(s) address'), secret: true },
   CLOUDFLARE_ACCOUNT_ID: { schema: z.string().trim().regex(/^[0-9a-f]{32}$/iu, 'An account ID has 32 hexadecimal characters'), secret: false },
   CLOUDFLARE_API_TOKEN: { schema: secret(32), secret: true },
@@ -30,13 +32,13 @@ export type IntegrationKey = keyof typeof integrationFields
 export const integrationKeys = Object.keys(integrationFields) as IntegrationKey[]
 /** What only makes sense where the Server is not already on Cloudflare's network. */
 export const offCloudflareKeys: IntegrationKey[] = integrationKeys.filter(key =>
-  !['EXA_API_KEY', 'XAI_API_KEY', 'INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_USER_ACCESS_TOKEN'].includes(key))
+  !['EXA_API_KEY', 'XAI_API_KEY', 'INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_USER_ACCESS_TOKEN', 'TIKTOK_ADVERTISER_ID', 'TIKTOK_ADVERTISER_ACCESS_TOKEN'].includes(key))
 
 export type IntegrationFieldStatus = { source: 'deployment' | 'settings' | null; value: string | null }
 export type IntegrationsDTO = {
   cloudflareNetwork: boolean
   threads: { callbackUrl: string; expiresAt: string | null; expired: boolean }
   fields: Partial<Record<IntegrationKey, IntegrationFieldStatus>>
-  status: { search: 'exa' | 'openrouter' | null; instagram: boolean; pages: string | null; outbound: string | null; inbound: string | null; calls: string | null }
+  status: { search: 'exa' | 'openrouter' | null; instagram: boolean; tiktokTrends: boolean; pages: string | null; outbound: string | null; inbound: string | null; calls: string | null }
   webhooks: { bridge: string; postmark: string; mailgun: string; ses: string }
 }

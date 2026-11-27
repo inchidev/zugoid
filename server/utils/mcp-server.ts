@@ -36,6 +36,7 @@ import { toolSecurityReason } from './agent-tool-security'
 import { executeRunTool } from './agent-tools'
 import { threadsSearchDescription, threadsSearchInput } from './agent-threads-search'
 import { instagramSearchCredentials, instagramSearchDescription, instagramSearchInput } from './agent-instagram-search'
+import { tiktokTrendsCredentials, tiktokTrendsDescription, tiktokTrendsInput } from './agent-tiktok-trends'
 import { withIntegrations } from '../../workers/integrations'
 import { loadThreadsConnection } from './threads-connection'
 import { runIdOfCredential } from './mcp-run-credential'
@@ -73,10 +74,11 @@ const prioritySchema = z.enum(['low', 'normal', 'high', 'urgent'])
 const statusSchema = z.enum(['backlog', 'ready', 'review', 'done', 'failed'])
 const taskReferenceSchema = z.union([z.string().trim().min(1), z.number().int().positive()])
 
-type ResearchToolName = 'search_threads' | 'search_instagram'
+type ResearchToolName = 'search_threads' | 'search_instagram' | 'search_tiktok_trends'
 const researchTools: Record<ResearchToolName, { description: string; inputSchema: z.ZodType }> = {
   search_threads: { description: threadsSearchDescription, inputSchema: threadsSearchInput },
   search_instagram: { description: instagramSearchDescription, inputSchema: instagramSearchInput },
+  search_tiktok_trends: { description: tiktokTrendsDescription, inputSchema: tiktokTrendsInput },
 }
 type RunResearch = { runId: string; available: ResearchToolName[]; signal: AbortSignal }
 
@@ -98,6 +100,7 @@ async function runResearch({ env, principal }: McpServerContext, signal: AbortSi
   const configured = {
     search_threads: Boolean(threads && threads.expiresAt > Date.now()),
     search_instagram: Boolean(instagramSearchCredentials(effective)),
+    search_tiktok_trends: Boolean(tiktokTrendsCredentials(effective)),
   }
   return { runId, available: published.filter(name => configured[name]), signal }
 }
