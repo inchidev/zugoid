@@ -15,8 +15,8 @@ export default defineEventHandler(async (event): Promise<{ agents: AgentDTO[]; t
   const actor = await requireMember(event, serverId, Permission.manageAgents)
   const query = getQuery(event)
   if (query.page !== undefined) {
-    const { search, page } = parseBody(z.object({ search: z.string().max(160).default(''), page: z.coerce.number().int().min(1).max(1000000) }), query)
-    return agentDirectoryPage(cf(event).env, search, page, actor.authorization)
+    const { search, page, kind } = parseBody(z.object({ search: z.string().max(160).default(''), kind: z.enum(['built-in', 'external']).optional(), page: z.coerce.number().int().min(1).max(1000000) }), query)
+    return agentDirectoryPage(cf(event).env, search, page, actor.authorization, kind)
   }
   const db = getDb(cf(event).env.DB)
   const rows = await db.select({ profile: agents, user: users }).from(agents)

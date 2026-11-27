@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { d1 } from '../helpers/sqlite-d1'
 import { loadAgentProvider, saveAgentProvider } from '../../server/utils/agent-providers'
+import { discoverAgentModels } from '../../server/utils/agent-provider-models'
 import { assertAgentModelSupportsTools } from '../../server/utils/agent-model-options'
 import { agentProviderSchema } from '../../shared/agent-providers'
 import type { ZugoidEnv } from '../../workers/env'
@@ -41,4 +42,22 @@ it('refuses a text-only model for an agent and allows tool-capable or unmarked m
   await expect(assertAgentModelSupportsTools(env, 'zugoid:work:vendor/unknown')).resolves.toBeUndefined()
   await expect(assertAgentModelSupportsTools(env, '')).resolves.toBeUndefined()
   await expect(assertAgentModelSupportsTools(env, '@cf/deployment/model')).resolves.toBeUndefined()
+})
+
+it('discovers general Gemini models with Google authentication and provider limits', async () => {
+  const transport = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+    expect(String(url)).toBe('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000')
+    expect(new Headers(options?.headers).get('x-goog-api-key')).toBe('synthetic-google-key')
+    return Response.json({ models: [
+      { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 },
+      { name: 'models/gemini-embedding', supportedGenerationMethods: ['embedContent'] },
+      { name: 'models/gemini-3-pro-image-preview', supportedGenerationMethods: ['generateContent'] },
+    ] })
+  })
+  try {
+    const models = await discoverAgentModels('google', 'synthetic-google-key')
+    expect(models).toMatchObject([{ id: 'gemini-3.8-flash', api: 'google', inputs: expect.arrayContaining(['video']), contextWindow: 1048576, maxOutputTokens: 65536 }])
+    await saveAgentProvider(env, 'direct-google', { kind: 'google', enabled: true, webSearch: false, apiKey: 'synthetic-google-key', models })
+    expect((await loadAgentProvider(env, 'direct-google'))?.name).toBe('Google Gemini')
+  } finally { transport.mockRestore() }
 })

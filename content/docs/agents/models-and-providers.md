@@ -1,6 +1,6 @@
 ---
 title: Models and Providers
-description: Connect OpenRouter, Claude, ChatGPT or Workers AI to your Zugoid Server, choose a default model and assign models to AI functions.
+description: Connect OpenRouter, Claude, Google Gemini, ChatGPT or Workers AI to your Zugoid Server, choose a default model and assign models to AI functions.
 order: 2
 ---
 
@@ -14,6 +14,7 @@ The Owner manages Server Providers and defaults. Members with **Use agents** see
 | --- | --- | --- |
 | OpenRouter | API key. Hundreds of models with one key. | Owner |
 | Claude | Anthropic API key. | Owner |
+| Google Gemini | Google AI Studio API key. | Owner |
 | ChatGPT / Codex | **Continue with ChatGPT** sign-in with your ChatGPT plan. | Owner, or any Member with **Use agents** for their own plan |
 | Workers AI | Comes with a Cloudflare Server's deployment, billed to its Cloudflare account. | Listed automatically; the Owner can turn it off |
 
@@ -22,7 +23,7 @@ Claude Pro or Max subscriptions cannot be used: the Claude Provider needs an Ant
 ## Add an API key Provider
 
 1. Open **Server settings → Models**. The Owner sees the **Providers** and **Defaults** tabs.
-2. Select **Add provider** and choose **OpenRouter** or **Claude**.
+2. Select **Add provider** and choose **OpenRouter**, **Claude** or **Google Gemini**.
 3. Optionally change the **Connection name**, for example to tell a work account from a personal one. You can add several connections of the same Provider.
 4. Paste the **API key**.
 5. In **Models**, use **Add a model…** to pick models from the Provider's catalog. Each model shows what it accepts (text, images, audio, video, files) and whether it reasons.
@@ -90,6 +91,7 @@ AI functions are small Server jobs that use a model directly, without an Agent. 
 | Web search | Search for Agents. Choose a model that supports tool calls on an OpenRouter connection with **Web search** enabled. An Exa key under **Server settings → Integrations** takes precedence. |
 | Images | Draws pictures an Agent asks for while it works in a Task's box, such as the art of a game, and saves each as a file in its checkout. Needs an OpenRouter model that outputs images. Without one, Agents use the Avatars model, or else Nano Banana on the Server's OpenRouter connection. |
 | Avatars | Draws profile pictures for Members and Agents. Needs an OpenRouter model that outputs images, such as Nano Banana. |
+| YouTube videos | Lets Agents with **Research the web** analyze public YouTube links. Choose a video-capable model on a direct Google Gemini connection. |
 | Image descriptions | Describes attached images for Agents whose model cannot see them. |
 | Voice transcription | Turns voice messages into text for Agents. |
 
@@ -100,6 +102,12 @@ Personal ChatGPT connections that are not shared serve only their owner's reques
 ### Generate avatars
 
 With **Avatars** assigned, profile and Agent settings show **Generate**. Describe the picture, optionally add up to three reference images, and keep **Zugoid style** for a toy-like black-and-white character shaped after the Zugoid logo. Preview it, then select **Use this picture**.
+
+## Watch a YouTube video
+
+In **Server settings → Models → Defaults → AI functions**, choose a Google Gemini model for **YouTube videos**. Any Agent with **Research the web** can then analyze a public YouTube link using that connection. Grant the same permission to the Member who starts the Run.
+
+Paste the link in an Agent conversation and say what you want from the video, such as a summary or the steps in a tutorial with timestamps. The Agent can watch clips of up to five minutes per call and request other time ranges for longer videos. Zugoid sends the video link and the Agent's question to Google. The result includes the original link and the requested time range.
 
 ## Images and voice
 

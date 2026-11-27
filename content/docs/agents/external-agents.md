@@ -20,16 +20,11 @@ You need **Manage agents** to create the Agent, and the Owner to create its acce
 
 ### 1. Create the Agent
 
-1. Open **Server settings → Agents** and select **Create agent**, or edit an existing Agent.
-2. Enter a **Name**.
-3. Under **Works on**, turn on **Its own computer (external agent)**.
-4. Enter the **Webhook URL**. It must be a public `https://` address.
-5. In **Key header**, enter the header your webhook expects the key in. It defaults to `Authorization`.
-6. In **Sender key**, enter the value to send in that header exactly as the receiver expects it, for example `Bearer …`.
-7. Set the **Reply timeout**: 2 to 120 minutes, 20 by default.
-8. Choose its **Role** and select **Create agent**.
-
-![The Create agent dialog with Its own computer (external agent) turned on, showing the Webhook URL, Key header, Sender key and Reply timeout fields](screenshot:agents-external-agent "Create an external Agent")
+1. Open **Server settings → Agents → External agents** and select **Connect external agent**.
+2. Choose **Grok Bot** or **Custom webhook** and enter a name.
+3. For **Grok Bot**, copy the routine instructions into a Grok Bot routine with a webhook trigger. Paste its POST URL and key into Zugoid. For **Custom webhook**, enter the public HTTPS URL, header name and sender key exactly as the receiver expects them.
+4. Set the **Reply timeout** and choose a Role with **Connect MCP clients** and **Send messages**.
+5. Select **Connect agent**. Reopen the Agent and select **Send test message** to send a real message in its private conversation. A reply in Zugoid confirms that both directions work.
 
 The sender key is stored encrypted and never shown again. Leave **Sender key** empty to keep the saved key; if you change the URL or header, enter the key again.
 

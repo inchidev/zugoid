@@ -18,7 +18,7 @@ export async function testAgentRoles({ api, runtimes, ids, memberId }) {
   const peer = await createRole('QA agent peer', Permission.sendMessages)
   const task = await createRole('QA agent task', Permission.readTasks | Permission.writeTasks | Permission.executeTasks | Permission.sendMessages)
   const wide = await createRole('QA agent outside scope', Permission.sendMessages, { boards: ['private'] })
-  let agent
+  let agent, external
   try {
     agent = (await api('alpha', root + '/agents', { method: 'POST', body: { displayName: 'QA role agent', model: 'fixture-model', roleId: admin.id } })).payload.agent
     assert.equal(agent.roleId, admin.id)
@@ -29,6 +29,28 @@ export async function testAgentRoles({ api, runtimes, ids, memberId }) {
     assert.equal(listed.payload.agents.find(row => row.id === agent.id).roleId, task.id)
     const all = await api('alpha', root + '/agents')
     assert.equal(all.payload.agents.find(row => row.id === agent.id).roleId, task.id)
+
+    const directory = root + '/agents?page=1&search=QA%20external%20agent'
+    const webhook = { url: 'https://bot.example/routine', headerValue: 'Bearer fixture-key' }
+    await api('alpha', root + '/agents', {
+      method: 'POST', body: { displayName: 'QA external agent', webhook: { ...webhook, replyTimeoutMinutes: 1 } }, expected: 400,
+    })
+    assert.equal((await api('alpha', directory)).payload.total, 0)
+    external = (await api('alpha', root + '/agents', {
+      method: 'POST', body: { displayName: 'QA external agent', webhook, model: 'ignored-for-external' },
+    })).payload.agent
+    assert.equal(external.model, '')
+    const externalPath = root + '/agents/' + external.id
+    const saved = (await api('alpha', externalPath + '/webhook')).payload.webhook
+    assert.equal(saved.url, webhook.url)
+    assert.equal(saved.hasHeaderValue, true)
+    assert.ok(!JSON.stringify(saved).includes(webhook.headerValue))
+    assert.equal((await api('alpha', directory + '&kind=external')).payload.agents[0].id, external.id)
+    assert.equal((await api('alpha', directory + '&kind=built-in')).payload.total, 0)
+    await api('alpha', externalPath, {
+      method: 'PATCH', body: { displayName: 'Unexpected rename', webhook: { url: 'https://elsewhere.example/routine' } }, expected: 400,
+    })
+    assert.equal((await api('alpha', directory)).payload.agents[0].displayName, 'QA external agent')
 
     await api('alpha', root + '/members/' + memberId, { method: 'PATCH', body: { roleId: profileManager.id } })
     await api('alpha', root + '/agents/' + agent.id, { method: 'PATCH', actor: 'alpha-member', body: { roleId: limited.id, displayName: 'Denied', instructions: 'Denied' }, expected: 403 })
@@ -54,6 +76,7 @@ export async function testAgentRoles({ api, runtimes, ids, memberId }) {
     console.log('PASS: agent role editor HTTP roundtrip, directory role IDs, scoped grants, protected Admin/current roles, atomic rejection and unchanged built-in autonomy policy')
   } finally {
     await api('alpha', root + '/members/' + memberId, { method: 'PATCH', body: { roleId: original.role_id } })
+    if (external) await api('alpha', root + '/agents/' + external.id, { method: 'DELETE' })
     if (agent) await api('alpha', root + '/agents/' + agent.id, { method: 'DELETE' })
     for (const role of [profileManager, roleManager, limited, peer, task, wide]) await api('alpha', root + '/roles/' + role.id, { method: 'DELETE' })
   }

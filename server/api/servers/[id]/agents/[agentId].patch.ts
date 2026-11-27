@@ -1,4 +1,6 @@
 import { and, eq } from 'drizzle-orm'
+import { agentWebhookInput } from '../../../../../shared/agent-webhooks'
+import { agentWebhook, agentWebhookWrite } from '../../../../utils/agent-webhooks'
 import { z } from 'zod'
 import { agents, roles, users } from '../../../../../drizzle/schema'
 import { nowIso } from '../../../../../shared/ids'
@@ -22,6 +24,7 @@ const bodySchema = z.object({
   displayName: z.string().trim().min(1).max(80).optional(),
   model: z.string().trim().max(200).optional(),
   instructions: z.string().trim().max(12_000).optional(),
+  webhook: agentWebhookInput.optional(),
   status: z.enum(['active', 'paused']).optional(),
 }).refine(body => Object.values(body).some(value => value !== undefined), 'No changes')
 
@@ -61,9 +64,14 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
   const instructions = body.instructions ?? current.profile.instructions
   const status = body.status ?? current.profile.status
 
+  const currentWebhook = body.webhook ? await agentWebhook(env, agentId) : null
+  if (body.webhook && (!currentWebhook || current.profile.archivedAt)) fail(409, 'external_agent_required', 'This Agent has no external connection to update')
+  const connection = body.webhook ? await agentWebhookWrite(env, agentId, actor.user.id, body.webhook, currentWebhook) : null
+
   await db.batch([
     db.update(users).set({ displayName, ...(body.roleId !== undefined ? { roleId } : {}), updatedAt: now }).where(eq(users.id, agentId)),
     db.update(agents).set({ harness, model, instructions, status, updatedAt: now }).where(eq(agents.userId, agentId)),
+    ...(connection ? [connection.query] : []),
   ])
   await writeAudit(env, {
     serverId,
@@ -76,6 +84,7 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
       model,
       status,
       roleChanged,
+      ...(connection ? { webhookHost: new URL(connection.webhook.url).host, webhookKeyChanged: Boolean(body.webhook?.headerValue) } : {}),
       ...(roleChanged ? { previousRoleId: current.user.roleId, roleId } : {}),
       instructionsChanged: body.instructions !== undefined && body.instructions !== current.profile.instructions,
     },

@@ -14,6 +14,7 @@ type CatalogKind = AgentProviderId | 'workers-ai'
 const catalogs: Record<CatalogKind, () => Promise<Catalog>> = {
   anthropic: () => import('@earendil-works/pi-ai/providers/anthropic.models').then(module => module.ANTHROPIC_MODELS as unknown as Catalog),
   chatgpt: () => import('@earendil-works/pi-ai/providers/openai-codex.models').then(module => module.OPENAI_CODEX_MODELS as unknown as Catalog),
+  google: () => import('@earendil-works/pi-ai/providers/google.models').then(module => module.GOOGLE_MODELS as unknown as Catalog),
   openrouter: () => import('@earendil-works/pi-ai/providers/openrouter.models').then(module => module.OPENROUTER_MODELS as unknown as Catalog),
   'workers-ai': () => import('@earendil-works/pi-ai/providers/cloudflare-workers-ai.models').then(module => module.CLOUDFLARE_WORKERS_AI_MODELS as unknown as Catalog),
 }

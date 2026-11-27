@@ -13,6 +13,10 @@ import { asRpc, fail } from './cf'
 import { auditStatement, writeAudit } from './messages'
 import { inferenceFailure } from './agent-inference-errors'
 
+function youtubeModel(provider: Pick<StoredAgentProvider, 'kind'>, model: AgentProviderModel) {
+  return provider.kind === 'google' && model.inputs?.includes('video') === true
+}
+
 export const aiFunctionKey = (id: AiFunctionId) => `ai.function.${id}`
 export async function aiFunctionConfig(env: ZugoidEnv, id: AiFunctionId): Promise<AiFunctionConfig> {
   const raw = await readServerSetting(env.DB, aiFunctionKey(id))
@@ -30,6 +34,8 @@ export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
   const catalog = await agentProviderCatalog(env, { actorId, requireTools: false })
   const webSearchModels = new Set(catalog.providers.flatMap(provider => provider.models
     .filter(model => webSearchModel(provider, model)).map(model => agentModelRef(provider.id, model.id))))
+  const youtubeModels = new Set(catalog.providers.flatMap(provider => provider.models
+    .filter(model => youtubeModel(provider, model)).map(model => agentModelRef(provider.id, model.id))))
   const functions: AiFunctionDTO[] = await Promise.all(aiFunctions.filter(definition => !pausedAiFunctions.has(definition.id)).map(async definition => {
     let config: AiFunctionConfig
     try { config = await aiFunctionConfig(env, definition.id) }
@@ -40,10 +46,11 @@ export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
     const requires = 'requires' in definition ? definition.requires : undefined
     const available = Boolean(provider?.configured && provider.enabled && chosen && modelMeetsRequirement(chosen, requires)
       && (definition.id !== 'web.search' || webSearchModel(provider, chosen))
+      && (definition.id !== 'video.youtube' || youtubeModel(provider, chosen))
       && (!drawingAiFunctions.has(definition.id) || provider.kind === 'openrouter'))
     return { ...definition, ...config, available, ...(chosen && provider ? { modelLabel: `${provider.name} / ${chosen.label || chosen.id}` } : {}) }
   }))
-  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: webSearchModels.has(model.value) })) }
+  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: webSearchModels.has(model.value), youtube: youtubeModels.has(model.value) })) }
 }
 
 export async function saveAiFunction(env: ZugoidEnv, authorization: AuthorizationContext, id: AiFunctionId, config: AiFunctionConfig) {
@@ -56,6 +63,7 @@ export async function saveAiFunction(env: ZugoidEnv, authorization: Authorizatio
     const definition = aiFunctions.find(item => item.id === id)!
     if ('requires' in definition && !modelMeetsRequirement(option, definition.requires)) fail(400, 'model_capability', `${definition.label} needs a model that ${definition.requires === 'image-output' ? 'outputs images' : definition.requires === 'image-input' ? 'reads images' : 'reads audio'}. Load the provider's models again if it should.`)
     if (drawingAiFunctions.has(id) && (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parseAgentModelRef(option.value)?.provider)?.kind !== 'openrouter') fail(400, 'model_capability', `${definition.label} currently draw with an OpenRouter image model`)
+    if (id === 'video.youtube' && !option.youtube) fail(400, 'model_capability', 'Choose a video model on a direct Google Gemini connection')
     if (id === 'web.search' && !option.webSearch) fail(400, 'search_unavailable', 'Choose a model that supports tool calls on an OpenRouter connection with Web search enabled')
   }
   await env.DB.batch([
@@ -68,13 +76,14 @@ export async function saveAiFunction(env: ZugoidEnv, authorization: Authorizatio
 export async function resolveAiFunction(env: ZugoidEnv, id: AiFunctionId, actorId: string): Promise<string> {
   const config = await aiFunctionConfig(env, id)
   const definition = aiFunctions.find(definition => definition.id === id)!
-  if (!config.model) fail(409, 'ai_function_unconfigured', `Choose a model for ${definition.label} in Settings → Agents → Providers`)
+  if (!config.model) fail(409, 'ai_function_unconfigured', `Choose a model for ${definition.label} in Server settings → Models → Defaults`)
   const selected = parseAgentModelRef(config.model)
   const provider = selected ? await loadAgentProvider(env, selected.provider) : null
   const model = provider?.models.find(model => model.id === selected?.model)
   if (!provider?.enabled || !provider.secret || !model || (provider.kind === 'chatgpt' && !chatGPTUsableBy(provider, actorId))) {
     fail(409, 'ai_function_unavailable', `${definition.label} uses an unavailable connection or model. Update its assignment in Providers.`)
   }
+  if (id === 'video.youtube' && !youtubeModel(provider, model)) fail(409, 'ai_function_unavailable', 'Choose a video model on a direct Google Gemini connection in Models → Defaults')
   if (id === 'web.search' && !webSearchModel(provider, model)) {
     fail(409, 'ai_function_unavailable', 'Web search needs an OpenRouter model that supports tool calls on a connection with Web search enabled. Update its assignment in Models → Defaults.')
   }

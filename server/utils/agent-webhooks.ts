@@ -1,3 +1,5 @@
+import { agentWebhooks } from '../../drizzle/schema'
+import { getDb } from './db'
 import type { AgentRun } from '../../shared/agent-execution'
 import { agentWebhookInput, publicWebhookUrl, type AgentWebhookDTO, type AgentWebhookInput, type AgentWebhookPayload } from '../../shared/agent-webhooks'
 import { stripAgentImageMarkers } from '../../shared/agent-images'
@@ -21,9 +23,8 @@ export function agentWebhookDTO(row: AgentWebhook): AgentWebhookDTO {
   return { url: row.url, headerName: row.headerName, hasHeaderValue: Boolean(row.credentialJson), replyTimeoutMinutes: row.replyTimeoutMinutes, updatedAt: row.updatedAt }
 }
 
-export async function saveAgentWebhook(env: ZugoidEnv, agentId: string, actorId: string, raw: AgentWebhookInput): Promise<AgentWebhookDTO> {
+export async function agentWebhookWrite(env: ZugoidEnv, agentId: string, actorId: string, raw: AgentWebhookInput, current: AgentWebhook | null) {
   const input = agentWebhookInput.parse(raw)
-  const current = await agentWebhook(env, agentId)
   // A saved sender key belongs to its destination; it never follows the Agent to a new URL.
   if (current?.credentialJson && !input.headerValue && (current.url !== input.url || current.headerName !== input.headerName)) {
     fail(400, 'webhook_key_required', 'Enter the sender key again for the new URL or header')
@@ -33,11 +34,15 @@ export async function saveAgentWebhook(env: ZugoidEnv, agentId: string, actorId:
     ? JSON.stringify(await encryptSecret(env.AUTH_SECRET!, scope(agentId), input.headerValue))
     : current?.credentialJson ?? null
   const now = nowIso()
-  await env.DB.prepare(`INSERT INTO agent_webhooks(agent_id,url,header_name,credential_json,reply_timeout_minutes,created_by,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET url=excluded.url,header_name=excluded.header_name,
-    credential_json=excluded.credential_json,reply_timeout_minutes=excluded.reply_timeout_minutes,updated_at=excluded.updated_at`)
-    .bind(agentId, input.url, input.headerName, credentialJson, input.replyTimeoutMinutes, actorId, now, now).run()
-  return agentWebhookDTO((await agentWebhook(env, agentId))!)
+  const update = { url: input.url, headerName: input.headerName, credentialJson, replyTimeoutMinutes: input.replyTimeoutMinutes, updatedAt: now }
+  return { query: getDb(env.DB).insert(agentWebhooks).values({ agentId, createdBy: actorId, createdAt: now, ...update })
+    .onConflictDoUpdate({ target: agentWebhooks.agentId, set: update }), webhook: agentWebhookDTO({ agentId, ...update }) }
+}
+
+export async function saveAgentWebhook(env: ZugoidEnv, agentId: string, actorId: string, raw: AgentWebhookInput): Promise<AgentWebhookDTO> {
+  const { query, webhook } = await agentWebhookWrite(env, agentId, actorId, raw, await agentWebhook(env, agentId))
+  await query.run()
+  return webhook
 }
 
 export async function deleteAgentWebhook(env: ZugoidEnv, agentId: string): Promise<boolean> {

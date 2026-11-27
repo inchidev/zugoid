@@ -4,6 +4,7 @@ import { z } from 'zod'
 export const aiFunctions = [
   { id: 'web.search', label: 'Web search', description: 'Choose a model that supports tool calls on an OpenRouter connection with Web search enabled. An Exa key under Integrations takes precedence.', maxOutputTokens: 2000 },
   { id: 'thread.title', label: 'Thread titles', description: 'Name new threads from their root message. Existing titles stay unchanged.', maxOutputTokens: 120 },
+  { id: 'video.youtube', label: 'YouTube videos', description: 'Let agents watch public YouTube videos by link and cite timestamps. Choose a model on a direct Google Gemini connection.', maxOutputTokens: 2500 },
   { id: 'image.describe', label: 'Image descriptions', description: 'Describe attached images for agents whose model cannot see them.', maxOutputTokens: 600, requires: 'image-input' },
   { id: 'audio.transcribe', label: 'Voice transcription', description: 'Turn voice messages into text for agents.', maxOutputTokens: 2000, requires: 'audio-input' },
   { id: 'image.generate', label: 'Images', description: 'Draw pictures agents ask for while they work, such as the art of a game. Needs an OpenRouter model that outputs images, such as Nano Banana. Without one, agents use the Avatars model, or else Nano Banana on the Server’s OpenRouter connection.', maxOutputTokens: 2000, requires: 'image-output' },
@@ -23,7 +24,7 @@ export const drawingAiFunctions: ReadonlySet<AiFunctionId> = new Set(['avatar.ge
 /** The shapes an agent may ask a picture in. */
 export const imageAspectRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'] as const
 export type ImageAspectRatio = typeof imageAspectRatios[number]
-export const aiFunctionIdSchema = z.enum(['apps.assist', 'thread.title', 'web.search', 'avatar.generate', 'image.generate', 'image.describe', 'audio.transcribe'])
+export const aiFunctionIdSchema = z.enum(['apps.assist', 'thread.title', 'web.search', 'avatar.generate', 'image.generate', 'image.describe', 'audio.transcribe', 'video.youtube'])
 export const aiFunctionConfigSchema = z.object({
   model: z.string().min(1).max(300).nullable(),
 }).strict()

@@ -130,6 +130,46 @@ describe('Pi run authorization', () => {
     expect((await call('forged-direct', 'list_tasks', {})).status).toBe(403)
   })
 
+  it('watches a bounded YouTube clip through Gemini from a Run using another model', async () => {
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')
+    await saveAgentProvider(env, 'video', { kind: 'google', enabled: true, webSearch: false, apiKey: 'synthetic-gemini-key',
+      models: [{ id: 'gemini-3.8-flash', api: 'google', inputs: ['text', 'video'] }] })
+    await writeServerSetting(env.DB, 'ai.function.video.youtube', '{"model":"zugoid:video:gemini-3.8-flash"}')
+    const run = await createAgentRun(env, (await start())!, input())
+    expect(run.model).toBe('@cf/test')
+    db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+    const token = await runCapability(env, run.id)
+    const call = (callId: string, name: string, args: unknown) => agentGateway(new Request('http://server/tools', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ callId, name, arguments: args }),
+    }), env, run.id, 'tools', () => {})
+    const transport = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request, init) => {
+      expect(String(request)).toBe('https://generativelanguage.googleapis.com/v1/interactions')
+      expect(new Headers(init?.headers).get('x-goog-api-key')).toBe('synthetic-gemini-key')
+      expect(init?.redirect).toBe('manual')
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: 'gemini-3.8-flash', store: false, input: [
+          { type: 'video', uri: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', processing: { type: 'static', start_offset: '60s', end_offset: '90s' } },
+          { type: 'text', text: 'What happens in this clip?' },
+        ],
+      })
+      return Response.json({ steps: [{ type: 'model_output', content: [{ type: 'text', text: 'At 01:06 the example begins.' }] }], usage: { total_tokens: 4200 } })
+    })
+    try {
+      expect(await (await call('youtube-discover', 'search_tools', { query: 'watch youtube' })).json()).toMatchObject({
+        tools: expect.arrayContaining([expect.objectContaining({ name: 'watch_youtube' })]),
+      })
+      const response = await call('youtube-watch', 'watch_youtube', {
+        url: 'https://youtu.be/dQw4w9WgXcQ?si=tracking', question: 'What happens in this clip?', startSeconds: 60, durationSeconds: 30,
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', analysis: 'At 01:06 the example begins.' })
+      expect(await findAgentRun(env, run.id)).toMatchObject({ totalTokens: 4200, modelCalls: 1 })
+      expect((await call('youtube-invalid', 'watch_youtube', { url: 'https://youtube.com.example.org/watch?v=dQw4w9WgXcQ', question: 'Read it' })).ok).toBe(false)
+      expect(transport).toHaveBeenCalledTimes(1)
+    } finally { transport.mockRestore() }
+  })
+
   it('keeps outbound discovery blocked across connection changes without exposing credentials', async () => {
     db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
     const run = await createAgentRun(env, (await start())!, input())

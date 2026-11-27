@@ -10,12 +10,12 @@ const qc = useQueryClient(), toast = useToast()
 const search = ref(''), saving = ref<AiFunctionId | null>(null)
 const functions = useQuery({
   queryKey: computed(() => ['ai-functions', props.serverId, search.value]),
-  queryFn: () => api<{ functions: AiFunctionDTO[]; models: Array<AgentModelOption & { webSearch: boolean }>; hasMore: boolean }>(`/api/servers/${props.serverId}/ai-functions`, { query: { search: search.value } }),
+  queryFn: () => api<{ functions: AiFunctionDTO[]; models: Array<AgentModelOption & { webSearch: boolean; youtube: boolean }>; hasMore: boolean }>(`/api/servers/${props.serverId}/ai-functions`, { query: { search: search.value } }),
   placeholderData: keepPreviousData,
 })
 function items(entry: AiFunctionDTO) {
   // Each function lists only models with the capability it needs, such as drawing images.
-  const models = (functions.data.value?.models ?? []).filter(model => (entry.id !== 'web.search' || model.webSearch) && modelMeetsRequirement(model, entry.requires))
+  const models = (functions.data.value?.models ?? []).filter(model => (entry.id !== 'web.search' || model.webSearch) && (entry.id !== 'video.youtube' || model.youtube) && modelMeetsRequirement(model, entry.requires))
   return [{ value: disabledModel, label: 'Disabled' },
     ...(entry.model && !models.some(model => model.value === entry.model) ? [{ value: entry.model, label: `${entry.model} (unavailable)` }] : []),
     ...models.map(model => ({ value: model.value, label: agentModelLabel(model), inputs: model.inputs, outputs: model.outputs })),

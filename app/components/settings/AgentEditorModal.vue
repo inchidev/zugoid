@@ -9,12 +9,13 @@ import { Permission, PermissionGrants, MemberPermissions } from '~~/shared/permi
 import { pausedPermissionKeys } from '~~/shared/features'
 import { agentRoleSummary } from '~~/shared/agent-roles'
 import { agentTemplates } from '~~/shared/agent-templates'
-import type { AgentDTO, RoleDTO } from '~~/shared/types'
+import { channelPath } from '~~/shared/paths'
+import type { AgentDTO, ChannelDTO, RoleDTO } from '~~/shared/types'
 import { publicWebhookUrl, type AgentWebhookDTO } from '~~/shared/agent-webhooks'
 
-const props = defineProps<{ serverId: string; agent?: AgentDTO | null }>()
+const props = defineProps<{ serverId: string; agent?: AgentDTO | null; external?: boolean }>()
 const open = defineModel<boolean>('open', { default: false })
-const emit = defineEmits<{ saved: [agent: AgentDTO] }>()
+const emit = defineEmits<{ saved: [agent: AgentDTO]; navigate: [] }>()
 const toast = useToast()
 const qc = useQueryClient()
 const { api } = useApi()
@@ -44,7 +45,8 @@ const roleItems = computed(() => [
 const saving = ref(false)
 const deleting = ref(false)
 const confirmDelete = ref(false)
-const busy = computed(() => saving.value || deleting.value)
+const testing = ref(false)
+const busy = computed(() => saving.value || deleting.value || testing.value)
 const avatarFile = shallowRef<File | null>(null)
 const removeCurrentAvatar = ref(false)
 const avatarPreview = useObjectUrl(avatarFile)
@@ -70,7 +72,7 @@ const form = reactive<AgentForm>({
 })
 
 const modelSearch = ref('')
-const providers = useQuery({ queryKey: computed(() => ['agent-provider-model-options', props.serverId, modelSearch.value, form.model]), queryFn: () => api<AgentProviderCatalog>(`/api/servers/${props.serverId}/agent-providers/model-options`, { query: { search: modelSearch.value, selected: form.model } }), enabled: open })
+const providers = useQuery({ queryKey: computed(() => ['agent-provider-model-options', props.serverId, modelSearch.value, form.model]), queryFn: () => api<AgentProviderCatalog>(`/api/servers/${props.serverId}/agent-providers/model-options`, { query: { search: modelSearch.value, selected: form.model } }), enabled: computed(() => open.value && !props.external) })
 const savedModels = computed(() => providers.data.value?.models ?? [])
 const modelRequired = computed(() => !form.model && !providers.data.value?.defaultModel)
 const agentsUnavailable = computed(() => providers.isSuccess.value && !modelSearch.value && modelRequired.value && !savedModels.value.length)
@@ -84,16 +86,17 @@ const selectedAgent = shallowRef<AgentDTO | null>(null)
 const isNew = computed(() => !selectedAgent.value)
 
 // An external Agent works on its own computer: Runs wake it through a webhook and it answers through MCP.
-const external = ref(false)
+const external = computed(() => props.external === true)
+const connectionType = ref<'grok' | 'custom'>('grok')
+const grokSetup = computed(() => isNew.value && connectionType.value === 'grok')
 const webhook = reactive({ url: '', headerName: 'Authorization', headerValue: '', replyTimeoutMinutes: 20 })
 const savedWebhook = useQuery({
   queryKey: computed(() => ['agent-webhook', props.serverId, selectedAgent.value?.id]),
   queryFn: () => api<{ webhook: AgentWebhookDTO | null }>(`/api/servers/${props.serverId}/agents/${selectedAgent.value!.id}/webhook`),
-  enabled: computed(() => open.value && Boolean(selectedAgent.value)),
+  enabled: computed(() => open.value && external.value && Boolean(selectedAgent.value)),
 })
 watch(() => savedWebhook.data.value, (data) => {
   if (!data) return
-  external.value = Boolean(data.webhook)
   Object.assign(webhook, { url: data.webhook?.url ?? '', headerName: data.webhook?.headerName ?? 'Authorization', headerValue: '', replyTimeoutMinutes: data.webhook?.replyTimeoutMinutes ?? 20 })
 }, { immediate: true })
 const webhookError = computed(() => !external.value ? '' : !publicWebhookUrl(webhook.url.trim()) ? 'Use a public https:// URL' : '')
@@ -106,7 +109,6 @@ const formAvatarUser = computed(() => ({
 }))
 
 function selectAgent(agent: AgentDTO) {
-  if (selectedAgent.value?.id !== agent.id) external.value = false
   roleId.value = agent.roleId ?? ''
   selectedAgent.value = agent
   avatarFile.value = null
@@ -120,7 +122,7 @@ function selectAgent(agent: AgentDTO) {
 }
 
 function createAgent() {
-  external.value = false
+  connectionType.value = 'grok'
   Object.assign(webhook, { url: '', headerName: 'Authorization', headerValue: '', replyTimeoutMinutes: 20 })
   roleId.value = 'member'
   selectedAgent.value = null
@@ -161,8 +163,34 @@ async function deleteAgent() {
   finally { deleting.value = false }
 }
 
+const grokRoutine = 'When this routine receives an agent.run webhook, work on the request in payload.prompt. Use an HTTP MCP client to call payload.server.mcp with Authorization: Bearer followed by payload.server.credential.token. Reply through send_message using payload.reply.arguments and set content to your answer. If you cannot finish, call complete_run with payload.complete.arguments, outcome failed, and a short note. Keep the credential out of your output.'
+async function copyRoutine() {
+  try {
+    await navigator.clipboard.writeText(grokRoutine)
+    toast.add({ title: 'Routine instructions copied', color: 'success' })
+  } catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
+}
+
+async function testConnection() {
+  const agent = selectedAgent.value
+  if (!agent || busy.value) return
+  testing.value = true
+  try {
+    const { channel } = await api<{ channel: ChannelDTO }>('/api/dms', { method: 'POST', body: { userId: agent.id, serverId: props.serverId } })
+    await api(`/api/channels/${channel.id}/messages`, { method: 'POST', body: {
+      content: 'Connection test. Please reply to this message in Zugoid so I can confirm the connection works.',
+      clientId: crypto.randomUUID(),
+    } })
+    await qc.invalidateQueries({ queryKey: ['dms'] })
+    await navigateTo(channelPath(channel))
+    open.value = false
+    emit('navigate')
+  } catch (error) { toast.add({ title: errorMessage(error), color: 'error' }) }
+  finally { testing.value = false }
+}
+
 async function saveAgent(event: FormSubmitEvent<AgentForm>) {
-  if (busy.value) return
+  if (busy.value || (external.value && !isNew.value && !savedWebhook.data.value?.webhook)) return
   if (webhookError.value) {
     toast.add({ title: webhookError.value, color: 'error' })
     return
@@ -176,6 +204,19 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
     return
   }
   const creating = isNew.value
+  const headerValue = webhook.headerValue.trim()
+  if (external.value && grokSetup.value && !headerValue) {
+    toast.add({ title: 'Enter the Grok Bot webhook key', color: 'error' })
+    return
+  }
+  const savedConnection = savedWebhook.data.value?.webhook
+  const connectionChanged = creating || Boolean(headerValue) || webhook.url.trim() !== savedConnection?.url
+    || webhook.headerName.trim() !== savedConnection?.headerName || webhook.replyTimeoutMinutes !== savedConnection?.replyTimeoutMinutes
+  const connection = external.value && connectionChanged ? {
+    url: webhook.url.trim(), headerName: grokSetup.value ? 'Authorization' : webhook.headerName.trim() || 'Authorization',
+    replyTimeoutMinutes: webhook.replyTimeoutMinutes, ...(headerValue ? { headerValue: grokSetup.value && !/^Bearer /iu.test(headerValue) ? `Bearer ${headerValue}` : headerValue } : {}),
+  } : undefined
+  const { model, ...profile } = event.data
   let persistedAgent: AgentDTO | null = null
   saving.value = true
   try {
@@ -183,7 +224,7 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
     if (selectedAgent.value) {
       result = await api<{ agent: AgentDTO }>(`/api/servers/${props.serverId}/agents/${selectedAgent.value.id}`, {
         method: 'PATCH',
-        body: { ...event.data, ...(can(Permission.manageRoles) && roleId.value && roleId.value !== selectedAgent.value.roleId ? { roleId: roleId.value } : {}) },
+        body: { ...profile, ...(external.value ? { webhook: connection } : { model }), ...(can(Permission.manageRoles) && roleId.value && roleId.value !== selectedAgent.value.roleId ? { roleId: roleId.value } : {}) },
       })
     }
     else {
@@ -192,24 +233,17 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
         body: {
           roleId: roleId.value === 'member' ? undefined : roleId.value,
           displayName: event.data.displayName,
-          model: event.data.model,
+          ...(external.value ? { webhook: connection } : { model }),
           instructions: event.data.instructions,
         },
       })
       selectedAgent.value = result.agent
     }
     persistedAgent = result.agent
-    if (external.value) {
-      await api(`/api/servers/${props.serverId}/agents/${result.agent.id}/webhook`, { method: 'PUT', body: {
-        url: webhook.url.trim(), headerName: webhook.headerName.trim() || 'Authorization', replyTimeoutMinutes: webhook.replyTimeoutMinutes,
-        ...(webhook.headerValue.trim() ? { headerValue: webhook.headerValue.trim() } : {}),
-      } })
+    if (connection) {
       webhook.headerValue = ''
+      await qc.invalidateQueries({ queryKey: ['agent-webhook', props.serverId, result.agent.id] })
     }
-    else if (savedWebhook.data.value?.webhook) {
-      await api(`/api/servers/${props.serverId}/agents/${result.agent.id}/webhook`, { method: 'DELETE' })
-    }
-    if (!creating) await qc.invalidateQueries({ queryKey: ['agent-webhook', props.serverId, result.agent.id] })
 
     if (avatarFile.value) {
       const formData = new FormData()
@@ -245,7 +279,7 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
       ])
       selectAgent(persistedAgent)
       toast.add({
-        title: creating ? 'Agent created, but its webhook or avatar could not be saved' : 'Agent updated, but its webhook or avatar could not be saved',
+        title: creating ? 'Agent created, but its avatar could not be saved' : 'Agent updated, but its avatar could not be saved',
         description: errorMessage(error),
         color: 'error',
       })
@@ -261,7 +295,7 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
 </script>
 
 <template>
-  <SettingsEditor v-model:open="open" back="Agents" :title="isNew ? 'Create agent' : `Edit ${selectedAgent?.displayName || 'agent'}`" :dismissible="!busy" :close="!busy" :ui="{ content: 'max-w-xl' }">
+  <SettingsEditor v-model:open="open" :back="external ? 'External agents' : 'Agents'" :title="isNew ? (external ? 'Connect external agent' : 'Create agent') : `Edit ${selectedAgent?.displayName || 'agent'}`" :dismissible="!busy" :close="!busy" :ui="{ content: 'max-w-xl' }">
     <template #body>
     <UForm :schema="schema" :state="form" :disabled="busy" class="min-w-0 space-y-5" :data-update-blocked="busy" @submit="saveAgent">
       <UAlert
@@ -301,27 +335,32 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
         <UInput v-model="form.displayName" autofocus class="w-full" />
       </UFormField>
 
-      <UFormField label="Works on" description="An external agent, such as Grok Bot, runs on its own computer. Mentions wake it through its webhook and it answers through this Server's MCP.">
-        <USwitch v-model="external" label="Its own computer (external agent)" />
-      </UFormField>
-
       <template v-if="external">
-        <UFormField label="Webhook URL" :error="webhook.url && webhookError ? webhookError : undefined" description="Each direct mention or DM sends one POST with the message, conversation and Run ID. Only direct mentions wake it.">
+        <UFormField v-if="isNew" label="Connect">
+          <USelect v-model="connectionType" :items="[{ label: 'Grok Bot', value: 'grok' }, { label: 'Custom webhook', value: 'custom' }]" class="w-full" />
+        </UFormField>
+        <UAlert v-if="grokSetup" color="neutral" variant="subtle" title="Set up a webhook routine in Grok Bot" description="Use these instructions in a Grok Bot routine with a webhook trigger. Then copy the POST URL and key here.">
+          <template #actions><UButton type="button" label="Copy routine instructions" color="neutral" variant="outline" size="sm" @click="copyRoutine" /></template>
+        </UAlert>
+        <LayoutLoadError v-if="savedWebhook.error.value" inline message="The external connection did not load." :retry="savedWebhook.refetch" />
+        <fieldset :disabled="!isNew && !savedWebhook.data.value?.webhook" class="space-y-5">
+        <UFormField label="Webhook URL" :error="webhook.url && webhookError ? webhookError : undefined" description="Direct mentions and messages in the agent’s chat start a Run.">
           <UInput v-model="webhook.url" type="url" placeholder="https://" class="w-full" />
         </UFormField>
         <div class="grid gap-3 sm:grid-cols-2">
-          <UFormField label="Key header" description="As the webhook's sender expects it.">
+          <UFormField v-if="!grokSetup" label="Key header" description="As the webhook's sender expects it.">
             <UInput v-model="webhook.headerName" placeholder="Authorization" class="w-full" />
           </UFormField>
-          <UFormField label="Sender key" :description="savedWebhook.data.value?.webhook?.hasHeaderValue ? 'Saved. Leave empty to keep it.' : 'Sent exactly as entered, for example Bearer …'">
+          <UFormField :label="grokSetup ? 'Grok Bot webhook key' : 'Sender key'" :description="grokSetup ? 'Copy the key from the routine’s Webhook section.' : savedWebhook.data.value?.webhook?.hasHeaderValue ? 'Saved. Leave empty to keep it.' : 'Sent exactly as entered, for example Bearer …'">
             <UInput v-model="webhook.headerValue" type="password" autocomplete="off" :placeholder="savedWebhook.data.value?.webhook?.hasHeaderValue ? '••••••••' : ''" class="w-full" />
           </UFormField>
         </div>
         <UFormField label="Reply timeout" description="Minutes to wait for its reply in the thread before the Run fails.">
           <UInputNumber v-model="webhook.replyTimeoutMinutes" :min="2" :max="120" class="w-40" />
         </UFormField>
+        </fieldset>
         <UAlert v-if="roleBlocksMcp" color="warning" variant="subtle" title="Its Role cannot connect to MCP" :description="`The ${selectedRole?.key === 'admin' ? 'Admin' : selectedRole?.name ?? 'Member'} Role does not include Connect MCP clients, so no access token can act as this agent. Choose a Role with it, or add it to this Role in Server settings → Roles and policies.`" />
-        <UAlert color="neutral" variant="subtle" title="Connect it back to this Server" :description="`Each webhook request carries a credential for its Run; the agent sends it as a bearer token to ${mcpUrl}, answers with send_message in the Run's thread, then calls complete_run with the webhook's runId; otherwise the Run keeps working until the reply timeout. With it the agent acts within its Role and no higher than the person who asked. An access token from User Settings → Access tokens is needed only for work outside a Run.`" />
+        <UAlert color="neutral" variant="subtle" title="Connect it back to this Server" :description="`Each webhook request carries a credential for its Run; the agent sends it as a bearer token to ${mcpUrl}, replies with send_message using reply.arguments. A reply to the original message completes the Run. Use the test message to check that the reply arrives here.`" />
       </template>
 
       <UFormField v-else name="model" :label="providers.data.value?.defaultModel ? 'Model (optional)' : 'Model'" description="Choose a model, or leave empty to use an available Server default. The conversation can override this model.">
@@ -337,8 +376,8 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
         <p class="mt-2 text-xs text-muted">Grant project work through a policy in a project's access. One agent can be Developer in one project and Reviewer in another. Templates do not change permissions.</p>
       </UFormField>
       <p v-else-if="isNew" class="text-sm text-muted">New agents start with the Member role. Ask someone with Manage roles to grant task execution and reporting permissions.</p>
-      <UFormField label="Fill instructions from an example" help="Replaces the instructions below with example text. It grants no access; what the agent may do comes from policies in each Factory project's access."><div class="flex flex-wrap gap-2"><UButton v-for="template in agentTemplates" :key="template.id" :label="template.name" color="neutral" variant="outline" :title="`Recommended project policy: ${template.policy}`" @click="form.instructions = template.instructions" /></div></UFormField>
-      <UFormField name="instructions" label="Profile instructions">
+      <UFormField v-if="!external" label="Fill instructions from an example" help="Replaces the instructions below with example text. It grants no access; what the agent may do comes from policies in each Factory project's access."><div class="flex flex-wrap gap-2"><UButton v-for="template in agentTemplates" :key="template.id" :label="template.name" color="neutral" variant="outline" :title="`Recommended project policy: ${template.policy}`" @click="form.instructions = template.instructions" /></div></UFormField>
+      <UFormField v-if="!external" name="instructions" label="Profile instructions">
         <UTextarea v-model="form.instructions" :rows="10" autoresize :maxrows="18" class="w-full" />
       </UFormField>
 
@@ -349,7 +388,8 @@ async function saveAgent(event: FormSubmitEvent<AgentForm>) {
 
 
       <div class="flex justify-end gap-2"><UButton v-if="selectedAgent && can(Permission.manageAgents)" label="Delete agent" color="error" variant="ghost" icon="i-ph-trash" class="me-auto" :disabled="busy" @click="confirmDelete = true" /><UButton label="Cancel" color="neutral" variant="ghost" :disabled="busy" @click="open = false" />
-      <UButton type="submit" :label="isNew ? 'Create agent' : 'Save changes'" :loading="saving" :disabled="isNew && !external && (providers.isPending.value || modelRequired)" />
+      <UButton v-if="external && !isNew && selectedAgent?.status === 'active' && can(Permission.useAgents)" type="button" label="Send test message" color="neutral" variant="outline" :loading="testing" :disabled="busy || !savedWebhook.data.value?.webhook" @click="testConnection" />
+      <UButton type="submit" :label="isNew ? (external ? 'Connect agent' : 'Create agent') : 'Save changes'" :loading="saving" :disabled="(isNew && !external && (providers.isPending.value || modelRequired)) || (!isNew && external && !savedWebhook.data.value?.webhook)" />
       </div>
     </UForm>
     <AgentsAccess v-if="selectedAgent && can(Permission.manageAgents)" class="mt-6" :server-id="serverId" :agent-id="selectedAgent.id" :agent-name="selectedAgent.displayName || 'this agent'" />
