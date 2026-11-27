@@ -18,6 +18,13 @@ const keyboardOpen = computed(() => keyboardHeight.value !== null)
 let fullViewportHeight = 0
 let viewportWidth = 0
 
+function restorePageScroll() {
+  if (!keyboardOpen.value || window.scrollY === 0 || (window.visualViewport?.scale ?? 1) !== 1) return
+  // Safari can scroll the document to the input's old position after the shell
+  // has fitted it above the keyboard. Only the panes inside the shell scroll.
+  window.scrollTo({ top: 0, behavior: 'instant' })
+}
+
 // Browsers can shrink only the visual viewport, while the native WebView shrinks the layout.
 function updateKeyboard() {
   const width = window.innerWidth
@@ -33,10 +40,12 @@ function updateKeyboard() {
   keyboardHeight.value = isMobile.value && editing && fullViewportHeight - visibleHeight > 120
     ? Math.floor(visibleHeight)
     : null
+  if (keyboardOpen.value && window.scrollY !== 0) void nextTick(restorePageScroll)
 }
 
 onMounted(updateKeyboard)
 useEventListener('resize', updateKeyboard)
+useEventListener('scroll', restorePageScroll, { passive: true })
 useEventListener(() => import.meta.client ? window.visualViewport : null, 'resize', updateKeyboard)
 useEventListener(['focusin', 'focusout'], () => requestAnimationFrame(updateKeyboard))
 
