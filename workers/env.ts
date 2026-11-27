@@ -38,6 +38,8 @@ export type ZugoidEnv = {
   /** Optional search provider credential; never sent to compute. */
   EXA_API_KEY?: string
   XAI_API_KEY?: string
+  INSTAGRAM_ACCOUNT_ID?: string
+  INSTAGRAM_USER_ACCESS_TOKEN?: string
 
   DB: D1Database
   BACKUPS?: R2Bucket

@@ -30,6 +30,10 @@ const statusLabel = (value: string | null) => value ? `On: ${labels[value] ?? va
 const field = (key: IntegrationKey) => data.value?.fields[key]
 const managed = (key: IntegrationKey) => field(key)?.source === 'deployment'
 const saved = (key: IntegrationKey) => field(key)?.source === 'settings'
+const instagramKeys = ['INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_USER_ACCESS_TOKEN'] as const
+const canSaveInstagram = computed(() => !busy.value
+  && instagramKeys.some(key => draft[key]?.trim())
+  && instagramKeys.every(key => draft[key]?.trim() || field(key)?.source))
 
 function randomSecret() {
   return [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, '0')).join('')
@@ -38,7 +42,7 @@ function generate(key: IntegrationKey) {
   draft[key] = randomSecret()
 }
 
-async function save(id: string, keys: IntegrationKey[], values?: Partial<Record<IntegrationKey, string | null>>) {
+async function save(id: string, keys: readonly IntegrationKey[], values?: Partial<Record<IntegrationKey, string | null>>) {
   const body = values ?? Object.fromEntries(keys.filter(key => draft[key]?.trim()).map(key => [key, draft[key]!.trim()]))
   if (!Object.keys(body).length) return
   busy.value = id
@@ -91,6 +95,17 @@ async function copy(text: string) {
       </article>
 
       <SettingsThreadsIntegration :server-id="serverId" :connection="data.threads" @changed="query.refetch()" />
+
+      <article class="space-y-3 rounded-lg border border-default p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <h3 class="flex-1 font-medium">Instagram Search</h3>
+          <UBadge :label="data.status.instagram ? 'Configured' : 'Off'" color="neutral" variant="subtle" />
+        </div>
+        <p class="text-sm text-muted">Agents with Research the web can search public posts by hashtag. Use a professional Instagram account linked to a Facebook Page and a Meta app approved for Instagram Public Content Access.</p>
+        <SettingsIntegrationField v-model="draft.INSTAGRAM_ACCOUNT_ID" label="Instagram professional account ID" plain :status="field('INSTAGRAM_ACCOUNT_ID')" :busy="busy === 'remove-INSTAGRAM_ACCOUNT_ID'" @remove="remove('INSTAGRAM_ACCOUNT_ID')" />
+        <SettingsIntegrationField v-model="draft.INSTAGRAM_USER_ACCESS_TOKEN" label="Facebook User access token" :status="field('INSTAGRAM_USER_ACCESS_TOKEN')" :busy="busy === 'remove-INSTAGRAM_USER_ACCESS_TOKEN'" @remove="remove('INSTAGRAM_USER_ACCESS_TOKEN')" />
+        <UButton label="Save" :loading="busy === 'instagram-search'" :disabled="!canSaveInstagram" @click="save('instagram-search', instagramKeys)" />
+      </article>
 
       <article class="space-y-3 rounded-lg border border-default p-4">
         <div class="flex flex-wrap items-center gap-2"><h3 class="flex-1 font-medium">Reading web pages</h3><UBadge :label="statusLabel(data.status.pages)" color="neutral" variant="subtle" /></div>

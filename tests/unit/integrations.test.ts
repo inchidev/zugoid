@@ -59,6 +59,7 @@ it.each([
   [{ NOPE: 'value' }], [{ CLOUDFLARE_ACCOUNT_ID: 'short' }], [{ CLOUDFLARE_API_TOKEN: 'short' }], [{ MAIL_GATEWAY_URL: 'ftp://mail.example.com' }],
   [{ MAIL_GATEWAY_URL: 'https://user:secret@mail.example.com' }], [{ POSTMARK_INBOUND_SECRET: 'short' }], [{ SES_SNS_TOPIC_ARN: 'not-an-arn' }], [{ BROWSER_CDP_URL: 'nonsense' }],
   [{ AUTH_SECRET: secret32 }], [{ PUBLIC_ORIGIN: 'https://evil.example' }],
+  [{ INSTAGRAM_ACCOUNT_ID: '@example' }], [{ INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic\ninjected' }],
 ])('refuses %j', async values => {
   await expect(updateIntegrations(env, { values })).rejects.toMatchObject({ statusCode: 400 })
   expect(stored()).toBeUndefined()
@@ -83,13 +84,23 @@ it('reports a value saved by another isolate at once, past the cache', async () 
   expect(status.status.search).toBe('exa')
   expect(status.fields.EXA_API_KEY?.source).toBe('settings')
 })
-it('offers web and X Search on Cloudflare, where the rest comes from bindings', async () => {
-  await updateIntegrations(env, { values: { XAI_API_KEY: 'xai-synthetic-key' } })
-  const status = await integrationsStatus({ ...f.env, ZUGOID_RUNTIME: 'workers' } as ZugoidEnv, ids.owner, 'https://zugoid.example')
+it('offers search integrations on Cloudflare and keeps the Instagram token encrypted', async () => {
+  await updateIntegrations(env, { values: { XAI_API_KEY: 'xai-synthetic-key', INSTAGRAM_ACCOUNT_ID: '17841405309211844' } })
+  const readStatus = () => integrationsStatus({ ...f.env, ZUGOID_RUNTIME: 'workers' } as ZugoidEnv, ids.owner, 'https://zugoid.example')
+  expect((await readStatus()).status.instagram).toBe(false)
+  await updateIntegrations(env, { values: { INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic-instagram-token' } })
+  const status = await readStatus()
   expect(status.cloudflareNetwork).toBe(true)
-  expect(Object.keys(status.fields)).toEqual(['EXA_API_KEY', 'XAI_API_KEY'])
-  expect(status.fields.XAI_API_KEY).toEqual({ source: 'settings', value: null })
+  expect(Object.keys(status.fields)).toEqual(['EXA_API_KEY', 'XAI_API_KEY', 'INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_USER_ACCESS_TOKEN'])
+  expect(status.fields).toMatchObject({
+    XAI_API_KEY: { source: 'settings', value: null },
+    INSTAGRAM_ACCOUNT_ID: { source: 'settings', value: '17841405309211844' },
+    INSTAGRAM_USER_ACCESS_TOKEN: { source: 'settings', value: null },
+  })
+  expect(status.status.instagram).toBe(true)
   expect(stored()).not.toContain('xai-synthetic-key')
+  expect(stored()).not.toContain('synthetic-instagram-token')
+  expect(JSON.stringify(status)).not.toContain('synthetic-instagram-token')
   expect((await withIntegrations(env)).XAI_API_KEY).toBe('xai-synthetic-key')
 })
 

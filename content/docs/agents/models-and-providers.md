@@ -62,6 +62,14 @@ The Owner can connect a Threads account in **Server settings → Integrations �
 
 With **Research the web** for both the Agent and the person asking, an Agent on any supported model can look up keywords or topic tags, narrow results by author or date, and cite original posts. The long-lived connection expires after up to 60 days. Reconnect from Integrations to renew it. [Meta’s token documentation](https://developers.facebook.com/documentation/threads/get-started/long-lived-tokens)
 
+### Instagram Search
+
+The Owner sets up **Server settings → Integrations → Instagram Search** with an Instagram Business or Creator account linked to a Facebook Page. In Meta App Review, get approval for **Instagram Public Content Access** and `instagram_basic`. Generate a Facebook User access token for that app as a person with access to the linked Page. For a Page role granted through Business Manager, Meta also requires `pages_read_engagement`, `business_management`, or `ads_management`. [Meta’s Hashtag Search requirements](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login/hashtag-search) · [Token and permissions reference](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-hashtag-search#reading)
+
+Save the numeric Instagram professional account ID and the Facebook User access token in Zugoid. You can find the account ID in the linked Page’s `instagram_business_account.id` field. Use a long-lived token and replace it here when it expires or is revoked. [Meta’s setup guide](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-facebook-login/get-started) · [Long-lived User access tokens](https://developers.facebook.com/documentation/facebook-login/guides/access-tokens/get-long-lived)
+
+With **Research the web** for both the Agent and the person asking, an Agent can search one hashtag per call using any supported model. It can ask for popular posts or posts from the last 24 hours and cite original links. Meta allows 30 distinct hashtags per professional account in a rolling seven-day period. [Meta’s recent media reference](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-hashtag/recent-media)
+
 ## Connect ChatGPT
 
 ChatGPT uses your ChatGPT plan instead of an API key.
