@@ -1,5 +1,6 @@
 import { parseBody } from './validate'
 import { z } from 'zod'
+import { timingSafeEqual } from 'node:crypto'
 import { authorize, ServerAction, type AuthorizationContext } from '../../shared/authorization'
 import { Permission } from '../../shared/permissions'
 import type { AgentRun, RunMandate } from '../../shared/agent-execution'
@@ -7,7 +8,7 @@ import { decryptSecret, encryptSecret, type EncryptedSecret } from '../../shared
 import { newId, nowIso } from '../../shared/ids'
 import { getServerId } from '../../shared/server-id'
 import { creationSpaceId, spaceResourceDenied, spaceSql } from '../../shared/spaces'
-import { CUSTOM_MCP_PROVIDER, mcpConnectionInput, mcpEndpointProblem, mcpPaymentRequired, outboundMcpProviders, reviewedMcpTools, UNOT_DRAFT_PROVIDER, unotDraftOrigin, unotDraftWrites, type McpAuthKind, type McpConnectionDTO, type McpConnectionGrant, type McpConnectionInput, type McpToolSnapshot } from '../../shared/outbound-mcp'
+import { CUSTOM_MCP_PROVIDER, managedMcpUpdate, mcpConnectionInput, mcpEndpointProblem, mcpPaymentRequired, outboundMcpProviders, reviewedMcpTools, UNOT_DRAFT_PROVIDER, UNOT_STUDIO_MCP_NAME, unotDraftOrigin, unotDraftWrites, type McpAuthKind, type McpConnectionDTO, type McpConnectionGrant, type McpConnectionInput, type McpToolSnapshot } from '../../shared/outbound-mcp'
 import type { DiscoverableTool } from '../../shared/tool-discovery'
 import type { ZugoidEnv } from '../../workers/env'
 import { loadAuthorizationContext } from './authorization'
@@ -25,6 +26,18 @@ const fields = 'id,server_id AS serverId,space_id AS spaceId,owner_id AS ownerId
 const scope = (serverId: string, id: string) => `outbound-mcp:${serverId}:${id}`
 const expired = (row: Connection) => Boolean(row.credentialExpiresAt && Date.parse(row.credentialExpiresAt) <= Date.now())
 const unotDraftsEnabled = (env: ZugoidEnv) => (env.PARTNER_SIGNIN_KEY?.trim().length ?? 0) >= 32 && unotDraftOrigin(env.PUBLIC_ORIGIN)
+const isManaged = (env: ZugoidEnv, row: Pick<Connection, 'name' | 'providerId'>) =>
+  (env.UNOT_STUDIO_MCP_KEY?.length ?? 0) >= 32 && unotDraftsEnabled(env)
+  && row.providerId === UNOT_DRAFT_PROVIDER && row.name === UNOT_STUDIO_MCP_NAME
+
+function requireDeployment(env: ZugoidEnv, actor: AuthorizationContext, key: string | undefined) {
+  const encoder = new TextEncoder()
+  const expected = encoder.encode(env.UNOT_STUDIO_MCP_KEY ?? '')
+  const provided = encoder.encode(key ?? '')
+  if (!actor.principal.isOwner || expected.byteLength < 32 || expected.byteLength !== provided.byteLength || !timingSafeEqual(expected, provided)) {
+    fail(403, 'managed_by_deployment', 'This connection is managed by the deployment')
+  }
+}
 /** Connection grants: Agents and Members (both users) and Roles that may use a connection. */
 async function connectionGrants(env: ZugoidEnv, ids: string[]): Promise<Map<string, McpConnectionGrant>> {
   const grants = new Map(ids.map(id => [id, { agentIds: [], memberIds: [], roleIds: [] } as McpConnectionGrant]))
@@ -38,9 +51,10 @@ async function connectionGrants(env: ZugoidEnv, ids: string[]): Promise<Map<stri
   }
   return grants
 }
-async function replaceConnectionGrants(env: ZugoidEnv, id: string, grants: McpConnectionGrant, actorId: string) {
+async function replaceConnectionGrants(env: ZugoidEnv, id: string, grants: McpConnectionGrant, actorId: string, update?: D1PreparedStatement) {
   const now = nowIso()
   await env.DB.batch([
+    ...(update ? [update] : []),
     env.DB.prepare('DELETE FROM grants WHERE connection_id=?').bind(id),
     ...[...grants.agentIds, ...grants.memberIds].map(memberId => env.DB.prepare('INSERT INTO grants(id,member_id,permissions,connection_id,created_by,created_at) VALUES (?,?,?,?,?,?)')
       .bind(newId(), memberId, Permission.useExternalTools, id, actorId, now)),
@@ -48,10 +62,11 @@ async function replaceConnectionGrants(env: ZugoidEnv, id: string, grants: McpCo
       .bind(newId(), roleId, Permission.useExternalTools, id, actorId, now)),
   ])
 }
-function dto(row: Connection, grants: McpConnectionGrant): McpConnectionDTO {
+function dto(env: ZugoidEnv, row: Connection, grants: McpConnectionGrant): McpConnectionDTO {
   return { id: row.id, name: row.name, providerId: row.providerId, endpoint: row.endpoint, description: row.description, authKind: row.authKind, ownership: row.ownerId ? 'member' : 'server', enabled: Boolean(row.enabled), revision: row.revision,
     grants, toolNames: JSON.parse(row.toolNamesJson), tools: JSON.parse(row.toolsJson), hasCredential: Boolean(row.hasCredential),
-    credentialExpiresAt: row.credentialExpiresAt, checkedAt: row.checkedAt, lastError: expired(row) ? 'credentials_expired' : row.lastError }
+    credentialExpiresAt: row.credentialExpiresAt, checkedAt: row.checkedAt, lastError: expired(row) ? 'credentials_expired' : row.lastError,
+    ...(isManaged(env, row) ? { managedByDeployment: true } : {}) }
 }
 function humanSession(actor: AuthorizationContext) {
   if (actor.principal.kind !== 'human' || actor.credential.kind !== 'session' || actor.delegation) fail(403, 'mcp_manage_denied', 'MCP connections are managed by signed-in people')
@@ -73,12 +88,12 @@ export async function mcpConnections(env: ZugoidEnv, actor: AuthorizationContext
   const rows = await env.DB.prepare(`SELECT ${fields} FROM mcp_outbound_connections WHERE server_id=? AND space_id IN (${spaceSql(actor)}) AND (owner_id=? OR (owner_id IS NULL AND ?)) ORDER BY name,id LIMIT 32`)
     .bind(actor.serverId, actor.principal.id, actor.principal.isOwner ? 1 : 0).all<Connection>()
   const grants = await connectionGrants(env, rows.results.map(row => row.id))
-  return { connections: rows.results.map(row => dto(row, grants.get(row.id)!)), providers: outboundMcpProviders.filter(provider => provider.id !== UNOT_DRAFT_PROVIDER || unotDraftsEnabled(env)) }
+  return { connections: rows.results.map(row => dto(env, row, grants.get(row.id)!)), providers: outboundMcpProviders.filter(provider => provider.id !== UNOT_DRAFT_PROVIDER || unotDraftsEnabled(env)) }
 }
 
-async function validateGrants(env: ZugoidEnv, input: McpConnectionInput, actor: AuthorizationContext, spaceId: string) {
-  if (input.ownership === 'member' && (input.grants.memberIds.length || input.grants.roleIds.length)) fail(403, 'mcp_grant_denied', 'Personal connections delegate only to explicitly selected Agents; their owner must initiate each Run')
-  for (const [kind, ids] of Object.entries(input.grants)) {
+async function validateGrants(env: ZugoidEnv, grants: McpConnectionGrant, ownership: McpConnectionInput['ownership'], spaceId: string) {
+  if (ownership === 'member' && (grants.memberIds.length || grants.roleIds.length)) fail(403, 'mcp_grant_denied', 'Personal connections delegate only to explicitly selected Agents; their owner must initiate each Run')
+  for (const [kind, ids] of Object.entries(grants)) {
     if (new Set(ids).size !== ids.length) fail(400, 'mcp_grant_invalid', 'Connection grants must be unique')
     for (const id of ids) {
       const row = kind === 'roleIds'
@@ -87,6 +102,9 @@ async function validateGrants(env: ZugoidEnv, input: McpConnectionInput, actor: 
       if (!row) fail(400, 'mcp_grant_invalid', 'Select an active Member, Agent or Role')
     }
   }
+}
+
+function validateConnectionTools(input: McpConnectionInput, actor: AuthorizationContext) {
   if (input.ownership === 'server' && !actor.principal.isOwner) fail(403, 'mcp_manage_denied', 'Only the Owner manages Server connections')
   if (new Set(input.toolNames).size !== input.toolNames.length) fail(400, 'mcp_write_disabled', 'Choose each tool once')
   if (input.providerId === CUSTOM_MCP_PROVIDER) {
@@ -99,12 +117,13 @@ async function validateGrants(env: ZugoidEnv, input: McpConnectionInput, actor: 
     fail(400, 'mcp_write_disabled', 'Choose only reviewed tools for this provider')
   }
 }
-export async function saveMcpConnection(env: ZugoidEnv, actor: AuthorizationContext, value: unknown, id?: string, serverOrigin?: string) {
+export async function saveMcpConnection(env: ZugoidEnv, actor: AuthorizationContext, value: unknown, id?: string, serverOrigin?: string, deploymentKey?: string) {
   humanSession(actor)
   if (actor.serverId !== await getServerId(env.DB)) fail(404, 'not_found', 'Server not found')
   const input = parseBody(mcpConnectionInput, value)
   const current = id ? await connection(env, id, actor) : null
   if (current) canManage(actor, current)
+  if ((current && isManaged(env, current)) || isManaged(env, input)) requireDeployment(env, actor, deploymentKey)
   if (input.providerId === UNOT_DRAFT_PROVIDER) {
     if (!unotDraftsEnabled(env) || input.ownership !== 'member') fail(403, 'mcp_manage_denied', 'Unot draft tools require a personal connection in an Unot dev studio')
     if ((!current || input.credential !== undefined) && (!input.credential || !input.credentialExpiresAt || Date.parse(input.credentialExpiresAt) <= Date.now())) {
@@ -113,7 +132,8 @@ export async function saveMcpConnection(env: ZugoidEnv, actor: AuthorizationCont
   }
   const spaceId = current?.spaceId ?? creationSpaceId(actor)
   if (!spaceId) fail(403, 'forbidden', 'Choose a Space first')
-  await validateGrants(env, input, actor, spaceId)
+  await validateGrants(env, input.grants, input.ownership, spaceId)
+  validateConnectionTools(input, actor)
   if (current && (current.providerId !== input.providerId || (current.ownerId ? 'member' : 'server') !== input.ownership)) fail(400, 'mcp_identity', 'Connection provider and ownership cannot change')
   const custom = input.providerId === CUSTOM_MCP_PROVIDER
   let endpoint: string | null = null
@@ -157,7 +177,37 @@ export async function saveMcpConnection(env: ZugoidEnv, actor: AuthorizationCont
   return connectionDto(env, connectionId)
 }
 async function connectionDto(env: ZugoidEnv, id: string) {
-  return dto(await connection(env, id), (await connectionGrants(env, [id])).get(id)!)
+  return dto(env, await connection(env, id), (await connectionGrants(env, [id])).get(id)!)
+}
+
+export async function updateManagedMcp(env: ZugoidEnv, actor: AuthorizationContext, id: string, value: unknown, deploymentKey?: string) {
+  const row = await connection(env, id, actor)
+  canManage(actor, row)
+  if (!isManaged(env, row) || !actor.principal.isOwner || row.ownerId !== actor.principal.id) fail(404, 'not_found', 'Managed MCP connection not found')
+  const input = parseBody(managedMcpUpdate, value)
+  const now = nowIso()
+  if ('agentIds' in input) {
+    const current = (await connectionGrants(env, [id])).get(id)!
+    const grants = { agentIds: input.agentIds, memberIds: [], roleIds: [] }
+    await validateGrants(env, grants, 'member', row.spaceId)
+    if (current.agentIds.length !== input.agentIds.length || input.agentIds.some(agent => !current.agentIds.includes(agent))) {
+      const update = env.DB.prepare('UPDATE mcp_outbound_connections SET revision=revision+1,updated_at=? WHERE id=?').bind(now, id)
+      await replaceConnectionGrants(env, id, grants, actor.principal.id, update)
+      await writeAudit(env, { serverId: actor.serverId, actorId: actor.principal.id, action: 'tool.connection.configure', targetType: 'tool_connection',
+        targetId: id, meta: { ownerId: row.ownerId, agentIds: input.agentIds }, authorization: actor })
+    }
+  } else {
+    requireDeployment(env, actor, deploymentKey)
+    const expires = new Date(input.credentialExpiresAt)
+    if (expires.getTime() <= Date.now()) fail(400, 'mcp_expiry', 'The credential has expired')
+    if (!env.AUTH_SECRET || env.AUTH_SECRET.length < 32) fail(503, 'mcp_encryption', 'Server credential encryption is unavailable')
+    const stored = JSON.stringify(await encryptSecret(env.AUTH_SECRET, scope(actor.serverId, id), input.credential))
+    await env.DB.prepare(`UPDATE mcp_outbound_connections SET credential_json=?,credential_expires_at=?,auth_kind='bearer',revision=revision+1,
+      enabled=CASE WHEN last_error='credentials_rejected' AND tools_json!='[]' THEN 1 ELSE enabled END,last_error=NULL,updated_at=?
+      WHERE id=? AND (credential_expires_at IS NULL OR julianday(credential_expires_at) < julianday(?))`)
+      .bind(stored, expires.toISOString(), now, id, expires.toISOString()).run()
+  }
+  return connectionDto(env, id)
 }
 async function credential(env: ZugoidEnv, row: Connection): Promise<McpAuth> {
   if (expired(row)) fail(409, 'mcp_credentials', 'MCP credentials expired; reconnect before using tools')
@@ -169,8 +219,9 @@ async function credential(env: ZugoidEnv, row: Connection): Promise<McpAuth> {
   const secret = await decryptSecret(env.AUTH_SECRET, scope(row.serverId, row.id), JSON.parse(stored.credential) as EncryptedSecret)
   return row.authKind === 'headers' ? JSON.parse(secret) as Record<string, string> : secret
 }
-export async function refreshMcpConnection(env: ZugoidEnv, actor: AuthorizationContext, id: string, serverOrigin?: string) {
+export async function refreshMcpConnection(env: ZugoidEnv, actor: AuthorizationContext, id: string, serverOrigin?: string, deploymentKey?: string) {
   const row = await connection(env, id, actor); canManage(actor, row)
+  if (isManaged(env, row)) requireDeployment(env, actor, deploymentKey)
   if (row.providerId === UNOT_DRAFT_PROVIDER && (!row.ownerId || !unotDraftsEnabled(env))) fail(403, 'mcp_denied', 'Unot draft tools are unavailable here')
   const custom = row.providerId === CUSTOM_MCP_PROVIDER
   if (custom && mcpEndpointProblem(row.endpoint ?? '', serverOrigin)) fail(400, 'mcp_endpoint', 'This connection URL is no longer permitted')
@@ -194,6 +245,7 @@ export async function refreshMcpConnection(env: ZugoidEnv, actor: AuthorizationC
 }
 export async function deleteMcpConnection(env: ZugoidEnv, actor: AuthorizationContext, id: string) {
   const row = await connection(env, id, actor); canManage(actor, row)
+  if (isManaged(env, row)) fail(403, 'managed_by_deployment', 'This connection is managed by the deployment')
   await env.DB.prepare('DELETE FROM mcp_outbound_connections WHERE id=? AND server_id=?').bind(id, actor.serverId).run()
   await writeAudit(env, { serverId: actor.serverId, actorId: actor.principal.id, action: 'tool.connection.delete', targetType: 'tool_connection', targetId: id, meta: { ownerId: row.ownerId }, authorization: actor })
 }

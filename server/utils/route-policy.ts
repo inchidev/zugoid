@@ -430,6 +430,7 @@ export const ROUTE_POLICIES: Readonly<Record<string, RoutePolicy>> = {
   'servers/[id]/tool-audit.get': inActiveSpace('tool-audit.read'),
   'servers/[id]/tool-connections/[connectionId].delete': inSpace('connection', 'connectionId', 'tool-connection.delete'),
   'servers/[id]/tool-connections/[connectionId].put': inSpace('connection', 'connectionId', 'tool-connection.update'),
+  'servers/[id]/tool-connections/[connectionId].patch': inSpace('connection', 'connectionId', 'tool-connection.update'),
   'servers/[id]/tool-connections/[connectionId]/refresh.post': inSpace('connection', 'connectionId', 'tool-connection.create'),
   'servers/[id]/tool-connections/index.get': inActiveSpace('tool-connections.read'),
   'servers/[id]/tool-connections/index.post': inActiveSpace('tool-connections.create'),
