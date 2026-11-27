@@ -20,7 +20,7 @@ const groups = computed(() => [
   ...others.value.map(link => ({ origin: link.origin, name: link.name, servers: [{ id: link.id, name: link.name }] })),
 ])
 // On a phone the rail joins the navigation drawer, and the page has it whole otherwise.
-const onPhone = computed(() => !session.user || ui.mobilePane === 'channels')
+const onPhone = computed(() => !session.user || ui.mobilePane === 'sections')
 function open(origin: string) {
   const link = servers.links.value.find(item => item.origin === origin)
   if (link) servers.open(link)

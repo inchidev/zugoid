@@ -24,11 +24,11 @@ const items = computed<DropdownMenuItem[][]>(() => [spaces.value.map(space => sp
 </script>
 
 <template>
-  <div v-if="canSwitch" class="shrink-0 border-b border-default px-1.5 pb-2 pt-1">
+  <div v-if="canSwitch" class="shrink-0 border-b border-default px-3 py-1.5 md:px-1.5 md:pb-2 md:pt-1">
     <UDropdownMenu :items="items" :ui="{ content: 'w-56' }">
       <button
         type="button"
-        class="relative flex w-full flex-col items-center gap-1 rounded-xl border border-default bg-default px-1 py-1.5 shadow-xs hover:bg-elevated focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary data-[state=open]:bg-accented"
+        class="relative flex min-h-11 w-full flex-row items-center gap-2 rounded-xl border border-default bg-default px-2 py-1.5 md:flex-col md:gap-1 md:px-1 shadow-xs hover:bg-elevated focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary data-[state=open]:bg-accented"
         :aria-label="`Space: ${label}. Switch Space${waiting.size ? '. New in another Space' : ''}`"
         :title="label"
       >
@@ -36,7 +36,7 @@ const items = computed<DropdownMenuItem[][]>(() => [spaces.value.map(space => sp
           <span class="flex size-7 items-center justify-center rounded-lg bg-primary text-xs font-semibold text-inverted" aria-hidden="true">{{ initials }}</span>
           <UIcon name="i-ph-caret-up-down" class="size-3 shrink-0 text-muted" />
         </span>
-        <span class="w-full min-w-0 truncate text-center text-[11px] font-semibold leading-3 text-highlighted">{{ label }}</span>
+        <span class="w-full min-w-0 truncate text-start text-sm font-semibold leading-4 text-highlighted md:text-center md:text-[11px] md:leading-3">{{ label }}</span>
         <span v-if="waiting.size" class="absolute end-1 top-1 size-2.5 rounded-full bg-primary ring-2 ring-[var(--ui-bg)]" data-space-unread aria-hidden="true" />
       </button>
       <template #item-label="{ item }">

@@ -2,6 +2,11 @@ import { channelPath, type ChannelRef } from './paths'
 
 export type ServerNavigationSection = 'chat' | 'inbox' | 'schedules' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'gadgets'
 
+export function isMobilePrimarySection(path: string): boolean {
+  const section = serverNavigationSection(path)
+  return section === 'inbox' || section === 'chat' || section === 'tasks' || section === 'data'
+}
+
 /** The Chat rail must not reopen an Agent DM remembered by an older Client. */
 export function chatNavigationTarget(conversations: readonly ChannelRef[], lastId?: string): string {
   const last = conversations.find(channel => channel.id === lastId)

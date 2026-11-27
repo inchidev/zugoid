@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { keepsHorizontalSwipe } from '~/composables/useSwipeToClose'
 import { hasServerNavigationMenu, serverNavigationSection } from '~~/shared/server-navigation'
-import { useMounted } from '@vueuse/core'
+import { useEventListener, useMounted } from '@vueuse/core'
 import { serverConnectionKey } from '../../composables/useServerSocket'
 
 const ui = useUiStore()
@@ -12,6 +12,33 @@ const { serverId: defaultServerId } = useServer()
 
 const isMobile = useIsMobile()
 const serverId = computed(() => props.serverId || defaultServerId.value || ui.last()?.serverId)
+const navigation = useServerSectionViews(() => serverId.value || '')
+const keyboardHeight = ref<number | null>(null)
+const keyboardOpen = computed(() => keyboardHeight.value !== null)
+let fullViewportHeight = 0
+let viewportWidth = 0
+
+// Browsers can shrink only the visual viewport, while the native WebView shrinks the layout.
+function updateKeyboard() {
+  const width = window.innerWidth
+  if (width !== viewportWidth) {
+    viewportWidth = width
+    fullViewportHeight = 0
+  }
+  fullViewportHeight = Math.max(fullViewportHeight, window.innerHeight)
+  const editing = document.activeElement?.matches(
+    'textarea, input:not([type]), input:is([type=text], [type=search], [type=email], [type=password], [type=tel], [type=url], [type=number]), [contenteditable=true], [contenteditable=plaintext-only]',
+  )
+  const visibleHeight = window.visualViewport?.height ?? window.innerHeight
+  keyboardHeight.value = isMobile.value && editing && fullViewportHeight - visibleHeight > 120
+    ? Math.floor(visibleHeight)
+    : null
+}
+
+onMounted(updateKeyboard)
+useEventListener('resize', updateKeyboard)
+useEventListener(() => import.meta.client ? window.visualViewport : null, 'resize', updateKeyboard)
+useEventListener(['focusin', 'focusout'], () => requestAnimationFrame(updateKeyboard))
 
 // Presence, unread dots, and incoming calls must keep working on every page, not
 // only while a conversation is open, so the server connection lives here.
@@ -20,16 +47,19 @@ const presence = usePresenceStore()
 watch(() => session.user?.id, id => presence.setSelf(id ?? null), { immediate: true })
 const { connection: serverConnection } = useServerSocket(() => serverId.value || '')
 provide(serverConnectionKey, serverConnection)
-const open = computed(() => ui.mobilePane === 'channels')
+const showSections = computed(() => isMobile.value && ui.mobilePane === 'sections')
+const open = computed(() => isMobile.value && (ui.mobilePane === 'channels' || showSections.value))
 
 // Follow the router's live route: page-level routes miss child-only changes,
 // such as opening a thread of the current channel from the drawer.
 const liveRoute = useRouter().currentRoute
 const hasMenu = computed(() => hasServerNavigationMenu(liveRoute.value.path))
+const section = computed(() => serverNavigationSection(liveRoute.value.path))
 const sectionIntent = ref<ReturnType<typeof serverNavigationSection>>(null)
 function selectSection(path: string) {
-  sectionIntent.value = isMobile.value && hasServerNavigationMenu(path) ? serverNavigationSection(path) : null
-  if (isMobile.value && !sectionIntent.value) ui.mobilePane = 'chat'
+  if (!isMobile.value) return
+  sectionIntent.value = serverNavigationSection(path) === 'chat' ? 'chat' : null
+  ui.mobilePane = sectionIntent.value ? 'channels' : 'chat'
 }
 function selectResource(navigates: boolean) {
   sectionIntent.value = null
@@ -38,12 +68,12 @@ function selectResource(navigates: boolean) {
 }
 watch(() => liveRoute.value.fullPath, () => {
   if (!isMobile.value) return
-  if (sectionIntent.value === serverNavigationSection(liveRoute.value.path) && hasMenu.value && open.value) return
+  if (sectionIntent.value === section.value && ui.mobilePane === 'channels' && hasMenu.value) return
   sectionIntent.value = null
   ui.mobilePane = 'chat'
 })
 
-// Swipe right anywhere to open the navigation drawer, swipe left to close it.
+// Swipe right to open the current section menu, swipe left to close the navigation.
 // The drawer follows the finger and settles by distance or flick velocity.
 const drawer = ref<HTMLElement | null>(null)
 const dragOffset = ref<number | null>(null)
@@ -54,7 +84,7 @@ const AXIS_LOCK_PX = 10
 
 function onTouchStart(event: TouchEvent) {
   if (!isMobile.value || !serverId.value || event.touches.length !== 1) return
-  if (ui.mobilePane === 'members') return
+  if (ui.mobilePane === 'members' || keyboardOpen.value || (!open.value && !hasMenu.value)) return
   const touch = event.touches[0]!
   const target = event.target
   if (!open.value && touch.clientX > EDGE_PX && keepsHorizontalSwipe(target)) return
@@ -98,7 +128,7 @@ function onTouchEnd(event: TouchEvent) {
     : dragOffset.value > current.width / 2
   dragOffset.value = null
   if (!shouldOpen) sectionIntent.value = null
-  ui.mobilePane = shouldOpen ? 'channels' : 'chat'
+  if (!shouldOpen || !current.fromOpen) ui.mobilePane = shouldOpen ? 'channels' : 'chat'
 }
 
 // The phone/desktop split lives in CSS (see .channel-drawer) so the first paint is
@@ -115,13 +145,49 @@ const drawerStyle = computed(() => {
   return { transform: open.value ? 'translateX(0)' : 'translateX(-100%)' }
 })
 
+let navigationTrigger: HTMLElement | null = null
+watch([open, showSections, section], async ([isOpen], [wasOpen]) => {
+  if (isOpen && !wasOpen) {
+    const active = document.activeElement
+    navigationTrigger = active instanceof HTMLElement && active.closest('[aria-controls="channel-navigation"], [aria-label="Mobile navigation"]')
+      ? active
+      : null
+  }
+  await nextTick()
+  if (open.value) {
+    drawer.value?.querySelector<HTMLElement>('[data-nav-heading]')?.focus({ preventScroll: true })
+  }
+  else if (wasOpen) {
+    navigationTrigger?.focus({ preventScroll: true })
+    navigationTrigger = null
+  }
+})
+
+watch(isMobile, (mobile) => {
+  if (!mobile) closeNavigation()
+})
+
 const backdropOpacity = computed(() => {
   if (dragOffset.value !== null) return dragOffset.value / (drawer.value?.offsetWidth || 300)
   return open.value ? 1 : 0
 })
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && isMobile.value && open.value) { sectionIntent.value = null; ui.mobilePane = 'chat' }
+  if (event.key !== 'Escape' || event.defaultPrevented || !open.value) return
+  closeNavigation()
+}
+
+function closeNavigation() {
+  sectionIntent.value = null
+  ui.mobilePane = 'chat'
+}
+
+function toggleSections() {
+  if (showSections.value) closeNavigation()
+  else {
+    sectionIntent.value = null
+    ui.mobilePane = 'sections'
+  }
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
@@ -130,45 +196,69 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 <template>
   <div
-    class="relative flex h-full overflow-hidden bg-default"
-    @touchstart.passive="onTouchStart"
-    @touchmove.passive="onTouchMove"
-    @touchend.passive="onTouchEnd"
-    @touchcancel.passive="onTouchEnd"
+    class="flex h-full min-h-0 flex-col overflow-hidden bg-default dark:bg-black"
+    :style="keyboardHeight ? { height: `${keyboardHeight}px` } : undefined"
   >
-    <aside
-      v-if="serverId"
-      id="channel-navigation"
-      ref="drawer"
-      class="channel-drawer flex min-h-0 shrink-0 bg-muted dark:bg-black md:border-e md:border-default"
-      :class="{ 'rail-only': !hasMenu }"
-      :style="drawerStyle"
-      :aria-hidden="isMobile && !open && dragOffset === null ? 'true' : undefined"
-      :inert="isMobile && !open && dragOffset === null ? true : undefined"
+    <div
+      class="relative flex min-h-0 flex-1 overflow-clip"
+      @touchstart.passive="onTouchStart"
+      @touchmove.passive="onTouchMove"
+      @touchend.passive="onTouchEnd"
+      @touchcancel.passive="onTouchEnd"
     >
-      <LayoutNavShell :server-id="serverId" @select-section="selectSection" @select-resource="selectResource" />
-      <LayoutResizeHandle
-        v-if="!isMobile && hasMenu"
-        v-model="ui.channelPaneWidth"
-        :min="200"
-        :max="360"
-        side="end"
-        label="Resize section menu"
+      <aside
+        v-if="serverId"
+        id="channel-navigation"
+        ref="drawer"
+        class="channel-drawer flex min-h-0 shrink-0 bg-muted dark:bg-black md:border-e md:border-default"
+        :class="{ 'rail-only': !hasMenu }"
+        :style="drawerStyle"
+        :aria-hidden="isMobile && !open ? 'true' : undefined"
+        :inert="isMobile && !open"
+      >
+        <LayoutNavShell
+          :server-id="serverId"
+          :navigation="navigation"
+          :show-sections="showSections"
+          @select-section="selectSection"
+          @select-resource="selectResource"
+        />
+        <LayoutResizeHandle
+          v-if="!isMobile && hasMenu"
+          v-model="ui.channelPaneWidth"
+          :min="200"
+          :max="360"
+          side="end"
+          label="Resize section menu"
+        />
+      </aside>
+      <button
+        v-if="serverId"
+        type="button"
+        class="channel-backdrop absolute inset-0 z-20 bg-black/60 md:hidden"
+        :class="open || dragOffset !== null ? '' : 'pointer-events-none'"
+        :style="{ opacity: backdropOpacity, transition: dragOffset !== null ? 'none' : undefined }"
+        tabindex="-1"
+        aria-label="Close navigation"
+        @click="closeNavigation"
       />
-    </aside>
-    <button
-      v-if="serverId"
-      type="button"
-      class="channel-backdrop absolute inset-0 z-20 bg-black/60 md:hidden"
-      :class="open || dragOffset !== null ? '' : 'pointer-events-none'"
-      :style="{ opacity: backdropOpacity, transition: dragOffset !== null ? 'none' : undefined }"
-      tabindex="-1"
-      aria-label="Close navigation"
-      @click="sectionIntent = null; ui.mobilePane = 'chat'"
-    />
-    <div class="server-content flex min-h-0 min-w-0 flex-1 flex-col pb-[var(--df-safe-area-bottom)] dark:bg-black">
-      <slot />
+      <div
+        class="server-content flex min-h-0 min-w-0 flex-1 flex-col dark:bg-black"
+        :class="serverId && !keyboardOpen ? 'md:pb-[var(--df-safe-area-bottom)]' : 'pb-[var(--df-safe-area-bottom)]'"
+        :inert="open"
+      >
+        <slot />
+      </div>
     </div>
+    <LayoutMobileNavigation
+      v-if="serverId && !keyboardOpen"
+      :views="navigation.views.value"
+      :section="section"
+      :show-sections="showSections"
+      class="md:hidden"
+      @select-section="selectSection"
+      @toggle-sections="toggleSections"
+    />
   </div>
 </template>
 
@@ -180,15 +270,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   inset-block: 0;
   inset-inline-start: 0;
   z-index: 30;
-  width: min(22rem, 86vw);
+  width: 100%;
   transform: translateX(-100%);
-  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5);
   transition: transform 260ms cubic-bezier(0.32, 0.72, 0, 1);
   will-change: transform;
-}
-
-.channel-drawer.rail-only {
-  width: 72px;
 }
 
 /* Wider screens: a fixed 72px rail plus the selected section's resizable menu. */
@@ -198,16 +283,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     z-index: auto;
     width: calc(72px + var(--channel-pane-width, 240px));
     transform: none;
-    box-shadow: none;
     transition: none;
+  }
+
+  .channel-drawer.rail-only {
+    width: 72px;
   }
 }
 
 .channel-backdrop {
   opacity: 0;
-}
-
-.channel-backdrop {
   transition: opacity 220ms ease;
 }
 
