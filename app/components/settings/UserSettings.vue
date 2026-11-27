@@ -83,7 +83,7 @@ watch(open, async (v) => {
     }
     await push.refresh()
   }
-})
+}, { immediate: import.meta.client })
 
 const groups = computed(() => [
   {
