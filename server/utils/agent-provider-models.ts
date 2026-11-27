@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { agentModelInputs, providerModelApi, type AgentModelInput, type AgentProviderId, type AgentProviderModel } from '../../shared/agent-providers'
 import { fail } from './cf'
 import { readLimitedStream } from '../../workers/inbound-email-signature'
+import { geminiDrawingCapabilities, isGeminiImageModel } from './gemini-images'
 
 /** Known origins only: a submitted provider never supplies a URL for credential-bearing requests. */
 export async function discoverAgentModels(kind: AgentProviderId, apiKey?: string): Promise<AgentProviderModel[]> {
@@ -31,15 +32,18 @@ const tokens = (value: unknown) => typeof value === 'number' && Number.isInteger
 /** Gemini's catalog reports generation methods and limits. General Gemini models accept video. */
 function googleCatalogModel(row: Record<string, unknown>): AgentProviderModel | null {
   if (typeof row.name !== 'string' || !/^models\/gemini-[a-z0-9.-]+$/u.test(row.name)) return null
-  if (!Array.isArray(row.supportedGenerationMethods) || !row.supportedGenerationMethods.includes('generateContent')) return null
   const id = row.name.slice('models/'.length)
-  if (id.length > 160 || /(?:image|tts|live|audio|robotics|embedding|transcribe|translate|computer-use|deep-research)/u.test(id)) return null
-  return {
-    id, label: typeof row.displayName === 'string' ? row.displayName.slice(0, 200) : id, api: 'google',
-    inputs: ['text', 'image', 'audio', 'video', 'file'], outputs: ['text'],
+  const imageModel = isGeminiImageModel(id)
+  if (!imageModel && (!Array.isArray(row.supportedGenerationMethods) || !row.supportedGenerationMethods.includes('generateContent')
+    || id.length > 160 || /(?:image|tts|live|audio|robotics|embedding|transcribe|translate|computer-use|deep-research)/u.test(id))) return null
+  const details = {
+    id, label: typeof row.displayName === 'string' ? row.displayName.slice(0, 200) : id, api: 'google' as const,
     contextWindow: tokens(row.inputTokenLimit), maxOutputTokens: tokens(row.outputTokenLimit),
     ...(typeof row.thinking === 'boolean' ? { reasoning: row.thinking } : {}),
   }
+  return imageModel
+    ? { ...details, ...geminiDrawingCapabilities }
+    : { ...details, inputs: ['text', 'image', 'audio', 'video', 'file'], outputs: ['text'] }
 }
 
 /** What a model accepts and whether it reasons, as the provider catalog reports it. */

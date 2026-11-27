@@ -29,6 +29,28 @@ it('does not inherit an Agent or Server default and allows tool-free function mo
   expect((await aiFunctionCatalog(env, 'owner')).models.map(model => model.value)).toContain('zugoid:named:chosen')
   await expect(resolveAiFunction(env, 'thread.title', 'owner')).rejects.toMatchObject({ statusCode: 409 })
 })
+it('offers direct Nano Banana for drawing and excludes it from chat and other AI functions', async () => {
+  await saveAgentProvider(env, 'google-work', { kind: 'google', enabled: true, webSearch: false,
+    apiKey: 'synthetic-google-key', models: [{ id: 'gemini-nano-banana-2.1', api: 'google', tools: true },
+      { id: 'gemini-3.8-flash', api: 'google', inputs: ['text', 'video'], outputs: ['text'] }] })
+  const model = 'zugoid:google-work:gemini-nano-banana-2.1'
+  const chat = 'zugoid:google-work:gemini-3.8-flash'
+  await saveAiFunction(env, authorization, 'image.generate', { model })
+  await saveAiFunction(env, authorization, 'avatar.generate', { model })
+  const catalog = await aiFunctionCatalog(env, 'owner')
+  expect(catalog.models).toEqual(expect.arrayContaining([
+    expect.objectContaining({ value: model, drawsImages: true, drawingOnly: true, youtube: false }),
+    expect.objectContaining({ value: chat, drawsImages: false, drawingOnly: false, youtube: true }),
+  ]))
+  for (const id of ['image.generate', 'avatar.generate'] as const) {
+    expect(catalog.functions.find(entry => entry.id === id)).toMatchObject({ model, available: true })
+  }
+  expect((await agentProviderCatalog(env)).models.map(option => option.value)).not.toContain(model)
+  await expect(saveAiFunction(env, authorization, 'image.describe', { model })).rejects.toMatchObject({ statusCode: 400 })
+  await expect(saveAiFunction(env, authorization, 'image.generate', { model: chat })).rejects.toMatchObject({ statusCode: 400 })
+  await writeServerSetting(env.DB, aiFunctionKey('thread.title'), JSON.stringify({ model }))
+  await expect(resolveAiFunction(env, 'thread.title', 'owner')).rejects.toMatchObject({ statusCode: 409 })
+})
 it('requires owner authorization to assign a model and rejects ambient deployment IDs', async () => {
   await expect(saveAiFunction(env, { ...authorization, principal: { ...authorization.principal, isOwner: false } }, 'apps.assist', { model: null })).rejects.toMatchObject({ statusCode: 403 })
   await expect(saveAiFunction(env, authorization, 'apps.assist', { model: '@cf/model' })).rejects.toMatchObject({ statusCode: 400 })
