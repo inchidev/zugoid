@@ -1,5 +1,6 @@
 import { createError } from 'h3'
 import { createItemSchema, updateItemSchema, moveItemSchema } from '../../shared/data-items'
+import { taskStatuses } from '../../shared/task-status'
 import { DataTrashTypes } from '../../shared/data-trash'
 import { dataError } from '../../shared/data-errors'
 import { bulkCreateRecords, bulkRecordsSchema } from './data-transfer'
@@ -127,7 +128,7 @@ export function agentTools(env: ZugoidEnv, authorization: AuthorizationContext, 
         return { started: true, runId: build.id, status: build.status }
       })
   }
-  add('update_task', ServerAction.writeTasks, z.object({ taskId: z.string().min(1), title: z.string().min(1).max(160).optional(), description: z.string().max(12000).optional(), parentTaskId: z.string().min(8).nullable().optional(), status: z.enum(['backlog', 'ready', 'review', 'done', 'failed']).optional() }),
+  add('update_task', ServerAction.writeTasks, z.object({ taskId: z.string().min(1), title: z.string().min(1).max(160).optional(), description: z.string().max(12000).optional(), parentTaskId: z.string().min(8).nullable().optional(), status: z.enum(taskStatuses).optional() }),
     'Update an authorized task. Set parentTaskId to attach or reparent on the same board and Project, or null to detach. Hierarchy does not change status or dependencies.', async ({ taskId, ...patch }) => { await scopedTask(taskId); return { task: await updateTask(env, authorization, taskId, patch, schedule) } })
   add('list_tables', ServerAction.readRecords, z.object({}), 'Discover authorized table IDs, fields and saved views without reading records. Field types: text, number, boolean, date, select, multi_select, url, email, phone, person (member IDs) and relation (record IDs of the field’s relation.databaseId).', async () => ({ tables: await listAuthorizedTables(env, authorization) }))
   add('list_data', ServerAction.readDocuments, z.object({}), 'Discover authorized tables and documents.', async () => listAuthorizedDataResources(env, authorization))

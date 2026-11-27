@@ -3,6 +3,7 @@ import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { relations, sql } from 'drizzle-orm'
 import { check, index, integer, primaryKey, real, sqliteTable, text, unique, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { CHANNEL_PERMISSION_MASK } from '../shared/channel-permissions'
+import { taskStatuses } from '../shared/task-status'
 
 function isoTimestamps() {
   return {
@@ -1391,7 +1392,7 @@ export const tasks = sqliteTable('tasks', {
   boardId: text('board_id').notNull().references(() => taskBoards.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description').notNull().default(''),
-  status: text('status', { enum: ['backlog', 'ready', 'review', 'done', 'failed'] }).notNull().default('backlog'),
+  status: text('status', { enum: taskStatuses }).notNull().default('backlog'),
   priority: text('priority', { enum: ['low', 'normal', 'high', 'urgent'] }).notNull().default('normal'),
   dueAt: text('due_at'),
   position: integer('position').notNull().default(0),

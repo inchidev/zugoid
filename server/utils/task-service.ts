@@ -204,7 +204,7 @@ export async function insertTask(
   await validateTaskHierarchy(env, authorization, { boardId, projectId, parentTaskId: input.parentTaskId ?? null }, true)
   const id = newId()
   const now = nowIso()
-  const status = input.assigneeId ? 'ready' as const : 'backlog' as const
+  const status = 'backlog' as const
   const task = {
     parentTaskId: input.parentTaskId ?? null,
     id,
@@ -280,19 +280,15 @@ export async function updateTask(
     if (!cover) fail(400, 'bad_request', 'A cover is an image attached to this Task')
   }
 
-  let status = input.status ?? task.status
-  if (input.status === undefined && input.assigneeId !== undefined) {
-    if (input.assigneeId === null) status = 'backlog'
-    else if (task.status === 'backlog') status = 'ready'
-  }
-  const position = input.position ?? (input.boardId || input.status ? await nextTaskPosition(env, boardId, status as TaskStatus) : task.position)
+  const status = input.status ?? task.status
+  const position = input.position ?? (input.boardId || input.status ? await nextTaskPosition(env, boardId, status) : task.position)
   const updatedAt = nowIso()
   const patch: Partial<typeof tasks.$inferInsert> = {
     parentTaskId,
     projectId,
     title: input.title ?? task.title,
     description: input.description ?? task.description,
-    status: status as TaskStatus,
+    status: input.status,
     priority: input.priority ?? task.priority,
     dueAt: input.dueAt === undefined ? task.dueAt : input.dueAt,
     position,

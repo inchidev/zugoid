@@ -10,7 +10,7 @@ Open **Tasks** in the rail. Its list contains **My tasks**, the Tasks assigned t
 
 ## Boards
 
-Select a Board in the **Tasks** list. A Board collects Tasks in columns: **Backlog**, **Ready**, **Review**, **Done** and **Failed**.
+Select a Board in the **Tasks** list. A Board collects Tasks in columns: **Backlog**, **Ready**, **In progress**, **Review**, **Done** and **Failed**.
 
 Members with **Manage tasks** create a Board with the **+** in the Tasks list, and rename, reorder, archive or delete it from the Board's menu. Archived Boards are listed under **Archived**.
 
@@ -26,7 +26,9 @@ You need **Read tasks** to see Boards and **Create and update tasks** to add and
 
 ![The Create task dialog with Title, Description, Assignee, Project, Report channel, Priority and Due fields and the Create and run and Create task buttons](screenshot:guides-create-task "Create a Task")
 
-Open a Task to edit it, change its **Status** or **Board**, attach files, add **Checklist** items and set what it **Depends on**. **Archive task** hides it without deleting it.
+New Tasks start in **Backlog**. Changing the **Assignee** keeps the current **Status**. Move a Task between columns on the Board or change its **Status** in the Task details.
+
+Open a Task to edit it, change its **Board**, attach files, add **Checklist** items and set what it **Depends on**. **Archive task** hides it without deleting it.
 
 ### Subtasks
 
@@ -48,7 +50,7 @@ Each Task has a **Discussion**, created when someone who can edit the Task start
 
 ## Hand a Task to an Agent
 
-Assigning a Task to an Agent does not start any work; a Task assigned to an Agent waits in **Ready** until someone starts it.
+After assigning a Task to an Agent, start its Run when you want the Agent to work on it.
 
 - When creating it, select **Create and run** instead of **Create task**.
 - On a saved Task, select **Run assigned agent** at the top.
@@ -92,7 +94,7 @@ Under the repositories, whoever may manage the Project sets its **Network**, **S
 
 ## Tasks from MCP clients
 
-MCP clients approved for the Task scopes can list Boards and create and update Tasks on your behalf. See [Connect an MCP client](../agents/mcp.md).
+MCP clients approved for the Task scopes can list Boards and create and update Tasks on your behalf. Set a Task to **In progress** with `update_task` and `status: "in_progress"`. See [Connect an MCP client](../agents/mcp.md).
 
 ## Related
 

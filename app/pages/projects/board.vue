@@ -19,6 +19,7 @@ import type {
   TaskStatus,
 } from '~~/shared/types'
 import { SHOTS_BOARD_NAME, type RecordingClip, type RecordingLimitsDTO } from '~~/shared/task-recordings'
+import { taskStatuses, taskStatusLabels } from '~~/shared/task-status'
 import { BOARD_ROUTE, boardPath } from '~~/shared/paths'
 import { boardOrderAfterMove } from '~~/shared/project-navigation'
 import { factoryStateLabel } from '~~/shared/software-factory'
@@ -231,13 +232,7 @@ const boardCrumbs = computed(() => {
   return selectedTask.value ? [...place, { label: taskLabel(selectedTask.value) }] : [...place.slice(0, -1), { label: place.at(-1)!.label }]
 })
 
-const columns: Array<{ status: TaskStatus; label: string }> = [
-  { status: 'backlog', label: 'Backlog' },
-  { status: 'ready', label: 'Ready' },
-  { status: 'review', label: 'Review' },
-  { status: 'done', label: 'Done' },
-  { status: 'failed', label: 'Failed' },
-]
+const columns = taskStatuses.map(status => ({ status, label: taskStatusLabels[status] }))
 // On a phone one column fills the screen, and a swipe or a tab moves to the next.
 const columnsEl = ref<HTMLElement | null>(null)
 const phoneColumn = ref<TaskStatus>(columns[0]!.status)
@@ -794,7 +789,7 @@ const taskSwipe = useSwipeToClose(() => { selectedTaskId.value = null })
                     :model-value="task.status"
                     :items="manualStatusOptions"
                     size="xs"
-                    class="ml-auto w-24"
+                    class="ml-auto w-28"
                     @update:model-value="value => setStatus(task.id, value as TaskStatus)"
                   />
                 </div>

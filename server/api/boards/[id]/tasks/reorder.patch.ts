@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { tasks } from '../../../../../drizzle/schema'
 import { nowIso } from '../../../../../shared/ids'
 import { Permission } from '../../../../../shared/permissions'
+import { taskStatuses } from '../../../../../shared/task-status'
 import { signalTasksChanged } from '../../../../../workers/task-events'
 import { cf, fail } from '../../../../utils/cf'
 import { getDb } from '../../../../utils/db'
@@ -14,7 +15,7 @@ import { parseBody } from '../../../../utils/validate'
 
 const bodySchema = z.object({
   taskId: z.string().min(8),
-  status: z.enum(['backlog', 'ready', 'review', 'done', 'failed']),
+  status: z.enum(taskStatuses),
   beforeTaskId: z.string().min(8).nullable().default(null),
 })
 

@@ -46,7 +46,7 @@ export default defineEventHandler(async (event) => {
     env.DB.prepare('UPDATE mcp_oauth_connections SET revoked_at=? WHERE subject_id=? AND revoked_at IS NULL').bind(now, agentId),
     env.DB.prepare('UPDATE mcp_access_tokens SET revoked_at=?, updated_at=? WHERE subject_id=? AND revoked_at IS NULL').bind(now, now, agentId),
     // Completed Tasks keep the Agent as their assignee for history; open ones need a new owner.
-    env.DB.prepare(`UPDATE tasks SET assignee_id=NULL, status=CASE WHEN status='ready' THEN 'backlog' ELSE status END, updated_at=?
+    env.DB.prepare(`UPDATE tasks SET assignee_id=NULL, updated_at=?
       WHERE assignee_id=? AND status NOT IN ('done') AND archived_at IS NULL`).bind(now, agentId),
     // Its sender key and destination are useless without the Agent and must not linger.
     env.DB.prepare('DELETE FROM agent_webhooks WHERE agent_id=?').bind(agentId),
