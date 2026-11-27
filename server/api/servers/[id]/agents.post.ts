@@ -1,4 +1,6 @@
 import { requireMemberQuota } from '../../../utils/space-quota'
+import { agentWebhookInput } from '../../../../shared/agent-webhooks'
+import { agentWebhookWrite } from '../../../utils/agent-webhooks'
 import { agentProviderCatalog } from '../../../utils/agent-providers'
 import { and, eq, ne } from 'drizzle-orm'
 import { z } from 'zod'
@@ -23,6 +25,7 @@ const bodySchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   // Empty model resolves to this Server's default profile (openai-compatible: AI_MODEL).
   model: z.string().trim().max(200).default(''),
+  webhook: agentWebhookInput.optional(),
   instructions: z.string().trim().max(12_000).default(''),
 })
 
@@ -35,7 +38,7 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
   const body = parseBody(bodySchema, await readBody(event))
   const { env, waitUntil } = cf(event)
   const harness = 'pi'
-  const model = body.model || (await agentProviderCatalog(env, { actorId: actor.user.id })).defaultModel || ''
+  const model = body.webhook ? '' : body.model || (await agentProviderCatalog(env, { actorId: actor.user.id })).defaultModel || ''
   const db = getDb(env.DB)
   const memberRole = (await db.select().from(roles).where(eq(roles.key, 'member')).limit(1))[0]
   if (!memberRole) fail(409, 'server_incomplete', 'Member role not found')
@@ -52,6 +55,7 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
   await assertAgentModelSupportsTools(env, model)
   const id = newId()
   const now = nowIso()
+  const connection = body.webhook ? await agentWebhookWrite(env, id, actor.user.id, body.webhook, null) : null
   await db.batch([
     db.insert(users).values({
       id,
@@ -80,6 +84,7 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
     // An Agent lives in exactly one Space; the trigger has just placed it in the default one.
     db.insert(spaceMembers).values({ spaceId, userId: id, joinedAt: now }).onConflictDoNothing(),
     db.delete(spaceMembers).where(and(eq(spaceMembers.userId, id), ne(spaceMembers.spaceId, spaceId))),
+    ...(connection ? [connection.query] : []),
   ])
   await writeAudit(env, {
     serverId,
@@ -87,7 +92,7 @@ export default defineEventHandler(async (event): Promise<{ agent: AgentDTO }> =>
     action: 'agent.create',
     targetType: 'agent',
     targetId: id,
-    meta: { displayName: body.displayName, model },
+    meta: { displayName: body.displayName, model, ...(connection ? { webhookHost: new URL(connection.webhook.url).host } : {}) },
   })
   waitUntil(signalMembersChanged(env, serverId))
   return {

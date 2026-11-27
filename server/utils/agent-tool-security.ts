@@ -14,14 +14,14 @@ const controls = new Set(['get_current_time', 'search_tools', 'get_tool_details'
  */
 const reads = new Set(['generate_image', 'search_data', 'list_data_trash', 'list_item_revisions', 'get_delegated_run', 'list_project_agents', 'list_public_project_repositories', 'inspect_public_project_repository', 'list_private_project_repositories', 'inspect_private_project_repository', 'read_private_project_file', 'factory_status', 'factory_publish', 'factory_plan', 'request_network_window', 'factory_merge', 'factory_feedback', 'list_tasks', 'get_task', 'list_tables', 'list_items', 'list_data', 'get_item', 'read_records', 'list_schedules', 'read_code_tree', 'read_github_repository', 'check_code_proposal', 'list_app_drafts', 'get_app_draft'])
 const writes = new Set(['start_build', 'bulk_create_records', 'trash_data', 'restore_data', 'restore_item_revision', 'delegate_task', 'create_task', 'update_task', 'execute_task', 'create_table', 'create_record', 'update_record', 'move_item', 'create_item', 'update_item', 'create_reminder', 'update_reminder', 'cancel_schedule', 'publish_code_changes', 'create_app_draft', 'update_app_draft'])
-const external = new Set(['read_url', 'search_web', 'read_code_file', 'read_github_issue', 'read_github_pull_request'])
+const external = new Set(['read_url', 'search_web', 'watch_youtube', 'read_code_file', 'read_github_issue', 'read_github_pull_request'])
 // A picture is drawn from the Agent's own prompt by the Server's provider: it reads no Server data.
 const publicReads = new Set(['generate_image', 'list_public_project_repositories', 'inspect_public_project_repository', 'list_project_agents'])
 /** Reads of Server data that not every Member or outside party may see. */
 export const privateSourceTools = [...reads].filter(name => !publicReads.has(name))
 /** Tools whose free-form arguments reach third parties, so they can carry data out. */
 export function arbitraryEgress(name: string): boolean {
-  return name === 'read_url' || name === 'search_web' || name.startsWith('mcp_')
+  return name === 'read_url' || name === 'search_web' || name === 'watch_youtube' || name.startsWith('mcp_')
 }
 /** Server-owned classification. Remote hints/descriptions and tool-name prefixes never grant authority. */
 export function toolEffect(name: string): ToolEffect {

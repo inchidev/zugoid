@@ -1,8 +1,9 @@
 import { z } from 'zod'
 
-export const agentProviderIds = ['openrouter', 'anthropic', 'chatgpt'] as const
+export const agentProviderIds = ['openrouter', 'anthropic', 'chatgpt', 'google'] as const
 export type AgentProviderId = typeof agentProviderIds[number]
-export const providerNames: Record<AgentProviderId, string> = { openrouter: 'OpenRouter', anthropic: 'Claude', chatgpt: 'ChatGPT / Codex' }
+export const providerNames: Record<AgentProviderId, string> = { openrouter: 'OpenRouter', anthropic: 'Claude', chatgpt: 'ChatGPT / Codex', google: 'Google Gemini' }
+export const providerModelApi = { openrouter: 'chat', anthropic: 'anthropic', chatgpt: 'responses', google: 'google' } as const satisfies Record<AgentProviderId, string>
 export const agentModelInputs = ['text', 'image', 'audio', 'video', 'file'] as const
 export type AgentModelInput = typeof agentModelInputs[number]
 export const agentEfforts = ['auto', 'low', 'medium', 'high'] as const
@@ -15,7 +16,7 @@ export const agentModelSchema = z.object({ id: z.string().trim().min(1).max(160)
   /** Input modalities reported by the provider catalog; absent when it does not report them. */
   inputs: z.array(z.enum(agentModelInputs)).max(agentModelInputs.length).optional(),
   /** Output modalities, such as image for models that draw. */
-  outputs: z.array(z.enum(agentModelInputs)).max(agentModelInputs.length).optional(), reasoning: z.boolean().optional(), api: z.enum(['chat', 'responses', 'anthropic']).default('chat'),
+  outputs: z.array(z.enum(agentModelInputs)).max(agentModelInputs.length).optional(), reasoning: z.boolean().optional(), api: z.enum(['chat', 'responses', 'anthropic', 'google']).default('chat'),
   /** Context window and answer limit in tokens, as the provider catalog reports them. */
   contextWindow: z.number().int().positive().max(100_000_000).optional(), maxOutputTokens: z.number().int().positive().max(100_000_000).optional(),
   /** The same limits set by the Owner in Server settings → Models, for a model whose provider did not report them. */

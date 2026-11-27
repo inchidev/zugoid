@@ -21,6 +21,7 @@ const connecting = useQuery({ queryKey: computed(() => ['agent-provider-connecti
 const providerCards: Record<AgentProviderId, { description: string }> = {
   openrouter: { description: 'Hundreds of models with one API key' },
   anthropic: { description: 'Claude models with an Anthropic API key' },
+  google: { description: 'Gemini models with a Google AI Studio API key' },
   chatgpt: { description: 'Your ChatGPT plan, for your own requests' },
 }
 // The deployment's own provider (Workers AI or an operator endpoint) is listed like the others.
@@ -185,7 +186,7 @@ watch(() => state.kind, () => { if (!editing.value) { state.models = []; availab
     </button>
     <UInput v-model="query" icon="i-ph-magnifying-glass" placeholder="Search providers" aria-label="Search providers" class="w-full" />
     <LayoutLoadError v-if="catalog.error.value" inline message="Providers did not load." :retry="catalog.refetch" />
-    <LayoutEmptyState v-else-if="!catalog.isPending.value && !visible.length" icon="i-ph-plugs" :title="isOwner ? 'No model providers yet' : 'No ChatGPT connection yet'" :description="isOwner ? 'Add OpenRouter, an Anthropic API key or ChatGPT so agents can reply.' : 'Connect your ChatGPT plan to use it with agents. You decide whether to share it with everyone here.'" />
+    <LayoutEmptyState v-else-if="!catalog.isPending.value && !visible.length" icon="i-ph-plugs" :title="isOwner ? 'No model providers yet' : 'No ChatGPT connection yet'" :description="isOwner ? 'Connect a model provider so agents can reply.' : 'Connect your ChatGPT plan to use it with agents. You decide whether to share it with everyone here.'" />
     <SettingsList v-else :items="visible" :item-key="provider => provider.id" :search-text="provider => provider.name" :search-from="Infinity" :noun="['provider', 'providers']" @select="edit"><template #row="{ item: provider }"><span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-elevated text-highlighted"><AgentsProviderLogo :kind="provider.kind" class="size-4" /></span><span class="min-w-0 flex-1"><span class="block truncate text-sm font-medium">{{ provider.name }}</span><span class="block truncate text-xs text-muted">{{ providerNames[provider.kind] }} · {{ provider.account || provider.keyPreview || (provider.configured ? 'Connected' : 'Not connected') }} · {{ provider.enabled ? `${provider.models.length} models` : 'Disabled' }}{{ provider.personal ? provider.shared ? ' · Shared with everyone' : ' · Only you can use it' : '' }}</span></span></template></SettingsList>
     <UPagination v-if="(catalog.data.value?.total ?? 0) > 15" v-model:page="page" :items-per-page="15" :total="catalog.data.value?.total ?? 0" />
     </template>

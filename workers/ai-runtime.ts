@@ -1,6 +1,7 @@
 import { createError } from 'h3'
 import { chatGPTAccessToken } from '../server/utils/agent-chatgpt'
 import { chatGPTFetch } from '../server/utils/chatgpt-transport'
+import { createGoogle } from '@ai-sdk/google'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { agentProviderCatalog, catalogAgentModel, resolveSavedAgentModel } from '../server/utils/agent-providers'
 import { createOpenAI } from '@ai-sdk/openai'
@@ -44,6 +45,7 @@ export async function modelForRun(env: ZugoidEnv, reference: string, _sessionId:
     return modelForAgent(env, reference)
   }
   if (saved.id === 'chatgpt') return createOpenAI({ apiKey: await chatGPTAccessToken(env, saved.connectionId, actorId!), fetch: chatGPTFetch }).responses(saved.model.id)
+  if (saved.id === 'google') return createGoogle({ apiKey: saved.apiKey })(saved.model.id)
   if (saved.id === 'anthropic') return createAnthropic({ apiKey: saved.apiKey })(saved.model.id)
   return createOpenAI({ baseURL: 'https://openrouter.ai/api/v1', apiKey: saved.apiKey, fetch: openRouterFetch }).chat(saved.model.id)
 }

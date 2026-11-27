@@ -1,4 +1,4 @@
-import { agentProviderIds, agentModelRef, parseAgentModelRef, providerNames, type AgentProviderId, type AgentProviderCatalog, type AgentProviderDTO, type agentProviderSchema } from '../../shared/agent-providers'
+import { agentProviderIds, agentModelRef, parseAgentModelRef, providerNames, providerModelApi, type AgentProviderId, type AgentProviderCatalog, type AgentProviderDTO, type agentProviderSchema } from '../../shared/agent-providers'
 import { decryptSecret, encryptSecret, type EncryptedSecret } from '../../shared/encrypted-secret'
 import { readServerSetting, writeServerSetting } from '../../shared/server-settings'
 import { aiProvider, resolveAgentModelId, type ZugoidEnv } from '../../workers/env'
@@ -15,6 +15,7 @@ export type StoredAgentProvider = { kind: AgentProviderId; name: string; enabled
 export function chatGPTUsableBy(provider: Pick<StoredAgentProvider, 'connectedBy' | 'shared'>, actorId?: string) {
   return !provider.connectedBy || provider.connectedBy === actorId || provider.shared === true
 }
+export const agentProviderKindsSql = agentProviderIds.map(kind => `'${kind}'`).join(',')
 export const agentProviderKey = (id: string) => `agents.provider.${id}`
 export const agentProviderScope = (id: string) => `agent-provider:${id}`
 export async function loadAgentProvider(env: ZugoidEnv, id: string): Promise<StoredAgentProvider | null> {
@@ -31,7 +32,7 @@ export async function providerDTO(env: ZugoidEnv, id: string, saved: StoredAgent
     ...(options.owner ? { keyPreview: saved.keyPreview ?? (!personal && saved.secret && env.AUTH_SECRET ? maskedAgentKey(await decryptSecret(env.AUTH_SECRET, agentProviderScope(id), saved.secret)) : undefined), account: saved.account, connectedAt: saved.connectedAt } : {}), personal }
 }
 export async function agentProviderPage(env: ZugoidEnv, actorId: string, search: string, page: number) {
-  const where = "key LIKE 'agents.provider.%' AND COALESCE(json_extract(value,'$.kind'),substr(key,17)) IN ('openrouter','anthropic','chatgpt') AND (json_extract(value,'$.kind') IS NOT 'chatgpt' OR json_extract(value,'$.connectedBy') IS NULL OR json_extract(value,'$.connectedBy')=? OR json_extract(value,'$.shared')=1) AND instr(lower(COALESCE(json_extract(value,'$.name'),'')||' '||key),?)>0"
+  const where = `key LIKE 'agents.provider.%' AND COALESCE(json_extract(value,'$.kind'),substr(key,17)) IN (${agentProviderKindsSql}) AND (json_extract(value,'$.kind') IS NOT 'chatgpt' OR json_extract(value,'$.connectedBy') IS NULL OR json_extract(value,'$.connectedBy')=? OR json_extract(value,'$.shared')=1) AND instr(lower(COALESCE(json_extract(value,'$.name'),'')||' '||key),?)>0`
   const count = await env.DB.prepare(`SELECT count(*) as total FROM server_settings WHERE ${where}`).bind(actorId, search.toLowerCase()).first<{ total: number }>()
   const rows = await env.DB.prepare(`SELECT key FROM server_settings WHERE ${where} ORDER BY lower(COALESCE(json_extract(value,'$.name'),key)),key LIMIT 15 OFFSET ?`).bind(actorId, search.toLowerCase(), (page - 1) * 15).all<{ key: string }>()
   const providers = (await Promise.all(rows.results.map(async row => { const id = row.key.slice('agents.provider.'.length); const saved = await loadAgentProvider(env, id); return saved ? providerDTO(env, id, saved, { owner: true, actorId }) : null }))).filter((p): p is AgentProviderDTO => Boolean(p))
@@ -96,7 +97,7 @@ export async function saveAgentProvider(env: ZugoidEnv, id: string, input: z.inf
   if (!secret && kind !== 'chatgpt') fail(400, 'key_required', 'Enter an API key')
   if (secret && !input.models.length) fail(400, 'model_required', 'Choose at least one model')
   if (new Set(input.models.map(m => m.id)).size !== input.models.length) fail(400, 'duplicate_model', 'Models must be unique')
-  if ((kind === 'anthropic' && input.models.some(m => m.api !== 'anthropic')) || (kind === 'openrouter' && input.models.some(m => m.api !== 'chat')) || (kind === 'chatgpt' && input.models.some(m => m.api !== 'responses'))) fail(400, 'invalid_api', 'The model protocol does not match this provider')
+  if (input.models.some(model => model.api !== providerModelApi[kind])) fail(400, 'invalid_api', 'The model protocol does not match this provider')
   await writeServerSetting(env.DB, agentProviderKey(id), JSON.stringify({ ...current, kind, name: input.name || (input.name === undefined && current?.name) || providerNames[kind], enabled: input.enabled, webSearch: input.webSearch && kind === 'openrouter', shared: kind === 'chatgpt' ? input.shared ?? current?.shared ?? false : undefined, models: input.models, secret, keyPreview: input.apiKey ? maskedAgentKey(input.apiKey) : current?.keyPreview }))
 }
 export async function resolveSavedAgentModel(env: ZugoidEnv, reference: string, actorId?: string) {
