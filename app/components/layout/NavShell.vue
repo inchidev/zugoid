@@ -240,17 +240,22 @@ watch(nav.inviteOpen, (open) => {
 
         <nav
           :aria-label="showSections ? 'More sections' : 'Server views'"
-          class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 md:px-1"
+          class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 md:px-1 md:py-2"
           @keydown.esc="tooltipPath = null"
         >
-          <div v-if="membersQ.isPending.value" class="space-y-1" aria-label="Loading views" aria-busy="true">
-            <div v-for="index in (compact ? 9 : 7)" :key="index" class="flex min-h-12 w-full items-center gap-3 px-3 md:flex-col md:justify-center md:gap-1.5 md:px-0" :class="compact ? 'md:min-h-11' : 'md:aspect-square'">
-              <USkeleton class="size-5" />
+          <div v-if="membersQ.isPending.value" class="mx-auto grid max-w-md grid-cols-2 gap-3 md:block md:max-w-none md:space-y-1" aria-label="Loading views" aria-busy="true">
+            <div
+              v-for="index in (compact ? 9 : 7)"
+              :key="index"
+              class="flex w-full flex-col items-start justify-between max-md:aspect-square max-md:rounded-xl max-md:border max-md:border-default max-md:bg-accented max-md:p-3.5 md:items-center md:justify-center md:gap-1.5"
+              :class="[compact ? 'md:min-h-11' : 'md:aspect-square md:min-h-12', { 'max-md:hidden': index > 4 }]"
+            >
+              <USkeleton class="size-8 md:size-5" />
               <USkeleton class="h-2 w-10" :class="{ 'md:hidden': compact }" />
             </div>
           </div>
           <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="min-h-11 w-full justify-center rounded-lg" @click="membersQ.refetch()" />
-          <ul v-else class="space-y-1">
+          <ul v-else class="mx-auto grid max-w-md grid-cols-2 gap-3 md:block md:max-w-none md:space-y-1">
             <li v-for="item in views" :key="item.path" :class="{ 'max-md:hidden': isMobilePrimarySection(item.path) }">
               <UTooltip
                 :text="item.label"
@@ -263,17 +268,19 @@ watch(nav.inviteOpen, (open) => {
                   :to="item.to"
                   :aria-current="isViewActive(item.path) ? 'page' : undefined"
                   :aria-label="sectionLinkLabel(item)"
-                  class="relative flex min-h-12 w-full items-center gap-3 rounded-lg px-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary md:flex-col md:justify-center md:gap-1 md:px-0.5"
+                  class="group relative flex w-full min-w-0 flex-col items-start justify-between focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary max-md:aspect-square max-md:rounded-xl max-md:border max-md:p-3.5 md:items-center md:justify-center md:gap-1 md:rounded-lg md:px-0.5"
                   :class="[
-                    compact ? 'md:min-h-11' : 'md:aspect-square',
-                    isViewActive(item.path) ? 'bg-accented text-highlighted' : 'text-muted hover:bg-elevated hover:text-default',
+                    compact ? 'md:min-h-11' : 'md:aspect-square md:min-h-12',
+                    isViewActive(item.path)
+                      ? 'max-md:border-inverted max-md:bg-inverted max-md:text-inverted md:bg-accented md:text-highlighted'
+                      : 'max-md:border-default max-md:bg-accented max-md:text-highlighted max-md:active:bg-elevated md:text-muted md:hover:bg-elevated md:hover:text-default',
                   ]"
                   @click="emit('selectSection', item.path)"
                 >
-                  <UIcon :name="item.icon" class="size-[22px] shrink-0" aria-hidden="true" />
-                  <span class="min-w-0 truncate text-sm font-medium md:max-w-full md:text-[11px] md:leading-3" :class="{ 'md:sr-only': compact }">{{ item.label }}</span>
-                  <span v-if="item.count" class="ms-auto min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted md:absolute md:end-1 md:top-1" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
-                  <span v-else-if="item.dot" class="ms-auto size-1.5 rounded-full bg-primary md:absolute md:end-3 md:top-1.5" aria-hidden="true" />
+                  <UIcon :name="item.icon" class="size-8 shrink-0 md:size-[22px]" aria-hidden="true" />
+                  <span class="min-w-0 text-[15px] leading-tight font-semibold wrap-break-word md:max-w-full md:truncate md:text-[11px] md:leading-3 md:font-medium" :class="{ 'md:sr-only': compact }">{{ item.label }}</span>
+                  <span v-if="item.count" class="absolute end-3 top-3 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted max-md:group-aria-[current=page]:bg-default max-md:group-aria-[current=page]:text-default md:end-1 md:top-1" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
+                  <span v-else-if="item.dot" class="absolute end-3.5 top-3.5 size-2 rounded-full bg-primary max-md:group-aria-[current=page]:bg-default md:end-3 md:top-1.5 md:size-1.5" aria-hidden="true" />
                 </NuxtLink>
               </UTooltip>
             </li>
