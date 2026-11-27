@@ -200,7 +200,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     :style="keyboardHeight ? { height: `${keyboardHeight}px` } : undefined"
   >
     <div
-      class="relative flex min-h-0 flex-1 overflow-hidden"
+      class="relative flex min-h-0 flex-1 overflow-clip"
       @touchstart.passive="onTouchStart"
       @touchmove.passive="onTouchMove"
       @touchend.passive="onTouchEnd"
