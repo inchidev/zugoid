@@ -157,7 +157,7 @@ async function syncPartnerProfile(env: ZugoidEnv, userId: string, name: string, 
     const key = `${prefix}${photo}.webp`
     if (key !== previous) {
       try {
-        const response = await fetch(`${origin}/b/${photo}.webp`, { redirect: 'error', signal: AbortSignal.timeout(4000) })
+        const response = await fetch(`${origin}/b/${photo}.webp`, { redirect: 'manual', signal: AbortSignal.timeout(4000) })
         if (response.ok && response.headers.get('content-type') === 'image/webp') {
           const bytes = await response.arrayBuffer()
           const hash = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
