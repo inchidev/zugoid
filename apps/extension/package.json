@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@types/chrome": "^0.1.36",
-    "esbuild": "0.28.1",
+    "@types/chrome": "^0.3.7",
+    "esbuild": "0.28.2",
     "typescript": "5.9.2"
   }
 }

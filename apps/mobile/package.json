@@ -23,8 +23,8 @@
     "@capawesome/capacitor-badge": "8.0.3"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.5.1",
-    "esbuild": "0.28.1",
+    "@capacitor/cli": "8.6.2",
+    "esbuild": "0.28.2",
     "typescript": "5.9.2"
   }
 }
