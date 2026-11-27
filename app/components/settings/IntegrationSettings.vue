@@ -31,9 +31,10 @@ const field = (key: IntegrationKey) => data.value?.fields[key]
 const managed = (key: IntegrationKey) => field(key)?.source === 'deployment'
 const saved = (key: IntegrationKey) => field(key)?.source === 'settings'
 const instagramKeys = ['INSTAGRAM_ACCOUNT_ID', 'INSTAGRAM_USER_ACCESS_TOKEN'] as const
-const canSaveInstagram = computed(() => !busy.value
-  && instagramKeys.some(key => draft[key]?.trim())
-  && instagramKeys.every(key => draft[key]?.trim() || field(key)?.source))
+const tiktokKeys = ['TIKTOK_ADVERTISER_ID', 'TIKTOK_ADVERTISER_ACCESS_TOKEN'] as const
+function canSaveCredentials(keys: readonly IntegrationKey[]) {
+  return !busy.value && keys.some(key => draft[key]?.trim()) && keys.every(key => draft[key]?.trim() || field(key)?.source)
+}
 
 function randomSecret() {
   return [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, '0')).join('')
@@ -104,7 +105,18 @@ async function copy(text: string) {
         <p class="text-sm text-muted">Agents with Research the web can search public posts by hashtag. Use a professional Instagram account linked to a Facebook Page and a Meta app approved for Instagram Public Content Access.</p>
         <SettingsIntegrationField v-model="draft.INSTAGRAM_ACCOUNT_ID" label="Instagram professional account ID" plain :status="field('INSTAGRAM_ACCOUNT_ID')" :busy="busy === 'remove-INSTAGRAM_ACCOUNT_ID'" @remove="remove('INSTAGRAM_ACCOUNT_ID')" />
         <SettingsIntegrationField v-model="draft.INSTAGRAM_USER_ACCESS_TOKEN" label="Facebook User access token" :status="field('INSTAGRAM_USER_ACCESS_TOKEN')" :busy="busy === 'remove-INSTAGRAM_USER_ACCESS_TOKEN'" @remove="remove('INSTAGRAM_USER_ACCESS_TOKEN')" />
-        <UButton label="Save" :loading="busy === 'instagram-search'" :disabled="!canSaveInstagram" @click="save('instagram-search', instagramKeys)" />
+        <UButton label="Save" :loading="busy === 'instagram-search'" :disabled="!canSaveCredentials(instagramKeys)" @click="save('instagram-search', instagramKeys)" />
+      </article>
+
+      <article class="space-y-3 rounded-lg border border-default p-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <h3 class="flex-1 font-medium">TikTok Trends</h3>
+          <UBadge :label="data.status.tiktokTrends ? 'Configured' : 'Off'" color="neutral" variant="subtle" />
+        </div>
+        <p class="text-sm text-muted">Agents with Research the web can find trending public videos by hashtag, country and period. Use a TikTok for Business advertiser account authorized for Discovery.</p>
+        <SettingsIntegrationField v-model="draft.TIKTOK_ADVERTISER_ID" label="TikTok advertiser ID" plain :status="field('TIKTOK_ADVERTISER_ID')" :busy="busy === 'remove-TIKTOK_ADVERTISER_ID'" @remove="remove('TIKTOK_ADVERTISER_ID')" />
+        <SettingsIntegrationField v-model="draft.TIKTOK_ADVERTISER_ACCESS_TOKEN" label="Advertiser access token" :status="field('TIKTOK_ADVERTISER_ACCESS_TOKEN')" :busy="busy === 'remove-TIKTOK_ADVERTISER_ACCESS_TOKEN'" @remove="remove('TIKTOK_ADVERTISER_ACCESS_TOKEN')" />
+        <UButton label="Save" :loading="busy === 'tiktok-trends'" :disabled="!canSaveCredentials(tiktokKeys)" @click="save('tiktok-trends', tiktokKeys)" />
       </article>
 
       <article class="space-y-3 rounded-lg border border-default p-4">

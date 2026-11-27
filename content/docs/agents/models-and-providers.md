@@ -70,6 +70,12 @@ Save the numeric Instagram professional account ID and the Facebook User access 
 
 With **Research the web** for both the Agent and the person asking, an Agent can search one hashtag per call using any supported model. It can ask for popular posts or posts from the last 24 hours and cite original links. Meta allows 30 distinct hashtags per professional account in a rolling seven-day period. [Meta’s recent media reference](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-hashtag/recent-media)
 
+### TikTok Trends
+
+In **Server settings → Integrations → TikTok Trends**, the Owner saves a TikTok for Business advertiser ID and access token. Authorize your developer app for the Discovery endpoints using the advertiser account. Use the token and the corresponding ID from `advertiser_ids`. [TikTok advertiser authorization](https://business-api.tiktok.com/gateway/docs/index?doc_id=1738373141733378&identify_key=c0138ffadd90a955c1f0670a56fe348d1d40680b3c89461e09f78ed26785164b) · [Obtain an advertiser access token](https://business-api.tiktok.com/portal/docs/obtain-an-advertiser-access-token/v2.0)
+
+With **Research the web** for both the Agent and the person asking, an Agent on any supported model can look up one trending hashtag in a country and get links to its top videos. Choose a 1-, 7-, 30- or 120-day ranking period. The defaults are the US and seven days. The hashtag has to appear in TikTok’s trend list and the video rankings cover the hashtag’s top countries. Keyword search across public videos is available through TikTok’s Research Tools for approved non-commercial projects. [Trending video endpoint](https://business-api.tiktok.com/portal/docs/get-trending-videos-related-to-hashtags/v1.3) · [Research Tools eligibility](https://developers.tiktok.com/docs/en/research-api-faq/)
+
 ## Connect ChatGPT
 
 ChatGPT uses your ChatGPT plan instead of an API key.

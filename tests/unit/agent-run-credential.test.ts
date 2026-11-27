@@ -121,7 +121,7 @@ describe('an external Agent’s Run credential', () => {
     expect(data.value).toMatchObject({ error: { message: expect.stringContaining('The Assistant role cannot perform data:read') } })
   })
 
-  it('lets only the authorized Run search Threads and Instagram through MCP and fences Server data from searches', async () => {
+  it('lets only the authorized Run use social searches over MCP and fences Server data from searches', async () => {
     await external()
     db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id IN ('agent-role','writer-role')`)
     await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role"}')
@@ -130,10 +130,13 @@ describe('an external Agent’s Run credential', () => {
     const standing = { ...asVanya, authorization: { ...asVanya.authorization, credential: { ...asVanya.authorization.credential, id: 'standing-token' } } }
     const listedSearchTools = async (principal: McpPrincipal) => {
       const { result } = await mcpRequest(principal, 'tools/list') as { result: { tools: Array<{ name: string }> } }
-      return result.tools.map(tool => tool.name).filter(name => ['search_threads', 'search_instagram'].includes(name)).sort()
+      return result.tools.map(tool => tool.name).filter(name => ['search_threads', 'search_instagram', 'search_tiktok_trends'].includes(name)).sort()
     }
     expect(await listedSearchTools(asVanya)).toEqual([])
-    await updateIntegrations(env, { values: { INSTAGRAM_ACCOUNT_ID: '17841405309211844', INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic-instagram-token' } })
+    await updateIntegrations(env, { values: {
+      INSTAGRAM_ACCOUNT_ID: '17841405309211844', INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic-instagram-token',
+      TIKTOK_ADVERTISER_ID: '7123412341234123412', TIKTOK_ADVERTISER_ACCESS_TOKEN: 'synthetic-tiktok-token',
+    } })
     const owner = { serverId: SERVER, userId: 'owner-user' }
     const auth = new URL(await beginThreadsConnection(env, owner, 'https://team.example', { appId: '1234', appSecret: 'synthetic-app-secret' }))
     const callback = new URL(auth.searchParams.get('redirect_uri')!)
@@ -144,7 +147,7 @@ describe('an external Agent’s Run credential', () => {
       .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-long-token', expires_in: 5184000 }))
     try {
       expect(await completeThreadsConnection(env, owner, callback)).toBe('connected')
-      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram', 'search_threads'])
+      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram', 'search_threads', 'search_tiktok_trends'])
       expect(await listedSearchTools(asPetya)).toEqual([])
       expect(await listedSearchTools(standing)).toEqual([])
       transport.mockClear()
@@ -160,15 +163,25 @@ describe('an external Agent’s Run credential', () => {
       const instagram = await call(asVanya, 'search_instagram', { hashtag: 'zugoid' })
       expect(instagram.isError, JSON.stringify(instagram.value)).toBe(false)
       expect(instagram.value).toMatchObject({ posts: [{ url: 'https://www.instagram.com/p/abc/', caption: 'Public launch' }] })
+      transport.mockResolvedValueOnce(Response.json({ code: 0, data: { list: [{ hashtag_id: '4268426520694', hashtag_name: 'gamedev', top_country_list: ['US'] }] } }))
+        .mockResolvedValueOnce(Response.json({ code: 0, data: { list: [{ hashtag_id: '4268426520694', top_video_list: [
+          { video_id: '7123412341234123413', share_url: 'https://www.tiktok.com/@studio/video/7123412341234123413' },
+        ] }] } }))
+      const tiktok = await call(asVanya, 'search_tiktok_trends', { hashtag: '#gamedev' })
+      expect(tiktok.isError, JSON.stringify(tiktok.value)).toBe(false)
+      expect(tiktok.value).toMatchObject({ country: 'US', dateRange: '7DAY', videos: [{ url: 'https://www.tiktok.com/@studio/video/7123412341234123413' }] })
       expect((await call(asVanya, 'list_task_boards', {})).isError).toBe(false)
       const blocked = await call(asVanya, 'search_threads', { query: 'private notes' })
       expect(blocked).toMatchObject({ isError: true, value: { error: { code: 'private_context_egress' } } })
       expect(await call(asVanya, 'search_instagram', { hashtag: 'privatenotes' })).toMatchObject({
         isError: true, value: { error: { code: 'private_context_egress' } },
       })
-      expect(transport).toHaveBeenCalledTimes(3)
+      expect(await call(asVanya, 'search_tiktok_trends', { hashtag: 'privatenotes' })).toMatchObject({
+        isError: true, value: { error: { code: 'private_context_egress' } },
+      })
+      expect(transport).toHaveBeenCalledTimes(5)
       await disconnectThreads(env)
-      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram'])
+      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram', 'search_tiktok_trends'])
     } finally { transport.mockRestore() }
   })
 
