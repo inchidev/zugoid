@@ -22,6 +22,12 @@ const roleOptions=computed(()=>(settings.value?.roles??[]).map(r=>({label:r.name
 const connections=computed(()=>connectionsQ.error.value||!settings.value?.mayConnect?[]:connectionsQ.data.value?.connections??[])
 const selectedConnectionId=ref<string|null>(null)
 const selectedConnection=computed(()=>connections.value.find(c=>c.id===selectedConnectionId.value))
+const managedAgentIds = ref<string[]>([])
+const managedAgentOptions = computed(() => (settings.value?.agents ?? []).filter(agent => agent.status === 'active').map(agent => ({ label: agent.name, value: agent.id })))
+watch(selectedConnectionId, () => {
+  managedAgentIds.value = (selectedConnection.value?.grants.agentIds ?? []).filter(id => managedAgentOptions.value.some(agent => agent.value === id))
+  error.value = ''
+})
 const selectedCapability=ref<ToolsSettingsDTO['capabilities'][number]|null>(null)
 const selectedTool=ref<NonNullable<ToolsSettingsDTO['preview']>['tools'][number]|null>(null)
 const selectedToolAudit=ref<ToolAuditPage['entries'][number]|null>(null)
@@ -57,6 +63,11 @@ watch(editorOpen,open=>{if(!open){clearSecrets();credentialAction.value='keep'}}
 const config=(c:McpConnectionDTO):McpConnectionInput=>({name:c.name,providerId:c.providerId as McpConnectionInput['providerId'],endpoint:c.endpoint??undefined,description:c.description,ownership:c.ownership,enabled:c.enabled,grants:c.grants,toolNames:c.toolNames,credentialExpiresAt:c.credentialExpiresAt})
 async function reload(){await qc.invalidateQueries({queryKey:['tool-connections',props.serverId]});await qc.invalidateQueries({queryKey:['tool-settings',props.serverId]});await qc.invalidateQueries({queryKey:['tool-audit',props.serverId]})}
 async function action(id:string,operation:()=>Promise<unknown>,success:string){if(busy.value)return;busy.value=id;error.value='';try{await operation();await reload();toast.add({title:success,color:'success'})}catch(cause){error.value=errorMessage(cause)}finally{busy.value=''}}
+async function saveManagedAgents(connection: McpConnectionDTO) {
+  await action('managed-agents', () => api(root.value + '/tool-connections/' + connection.id, {
+    method: 'PATCH', body: { agentIds: managedAgentIds.value },
+  }), 'Agent access saved')
+}
 async function save(){
   const body:McpConnectionInput={...form,enabled:false,grants:{agentIds:[...form.grants.agentIds],memberIds:[...form.grants.memberIds],roleIds:[...form.grants.roleIds]},toolNames:[...form.toolNames],credentialExpiresAt:expiry.value||null}
   if(credentialAction.value==='remove')body.credential=null
@@ -98,10 +109,30 @@ async function remove(){const c=removeTarget.value;if(!c)return;await action(c.i
           <p v-if="!settings.mayConnect" class="text-sm text-muted">Your Role needs Use external tools to manage connections. Restricted connections are not listed.</p>
           <LayoutLoadError v-else-if="connectionsQ.error.value" message="Connections could not be loaded." :retry="connectionsQ.refetch" />
           <p v-else-if="connectionsQ.isPending.value" role="status">Loading connections…</p><p v-else-if="!connections.length" class="text-sm text-muted">No connections you can manage. Connect a source to get started.</p>
-          <SettingsList v-if="settings.mayConnect && !connectionsQ.error.value" :items="connections" :item-key="connection => connection.id" :search-text="connection => connection.name" :noun="['connection', 'connections']" @select="selectedConnectionId = $event.id"><template #row="{ item: connection }"><span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"><UIcon name="i-ph-plugs-connected" class="size-4" /></span><span class="min-w-0 flex-1"><span class="block text-sm font-medium">{{ connection.name }}</span><span class="block text-xs text-muted">{{ health(connection) }}</span></span></template></SettingsList>
+          <SettingsList v-if="settings.mayConnect && !connectionsQ.error.value" :items="connections" :item-key="connection => connection.id" :search-text="connection => connection.name" :noun="['connection', 'connections']" @select="selectedConnectionId = $event.id">
+            <template #row="{ item: connection }">
+              <span class="flex size-8 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"><UIcon name="i-ph-plugs-connected" class="size-4" /></span>
+              <span class="min-w-0 flex-1">
+                <span class="block text-sm font-medium">{{ connection.name }}</span>
+                <span class="block text-xs text-muted">{{ health(connection) }}</span>
+              </span>
+              <UBadge v-if="connection.managedByDeployment" label="Managed by deployment" color="neutral" variant="subtle" />
+            </template>
+          </SettingsList>
           <SettingsEditor back="Tools" :open="Boolean(selectedConnection)" :title="selectedConnection?.name || 'Connection'" @update:open="value => { if (!value) selectedConnectionId = null }"><template #body><article v-if="selectedConnection" class="min-w-0 space-y-3">
             <template v-for="connection in [selectedConnection]" :key="connection.id">
             <div class="flex flex-wrap items-center gap-2"><h3 class="min-w-0 flex-1 break-words font-medium">{{ connection.name }}</h3><UBadge :label="health(connection)" color="neutral" variant="subtle" /></div>
+            <form v-if="connection.managedByDeployment" class="space-y-3" @submit.prevent="saveManagedAgents(connection)">
+              <UBadge label="Managed by deployment" color="neutral" variant="subtle" />
+              <p class="text-sm text-muted">Unot renews credentials. Selected agents with Use external tools can use this connection in runs you start.</p>
+              <UAlert v-if="error" color="error" variant="subtle" :title="error" />
+              <UAlert v-if="connection.lastError" color="warning" variant="subtle" title="This connection needs attention" description="The credentials and tool connection are managed by Unot." />
+              <UFormField label="Allowed agents">
+                <USelectMenu v-model="managedAgentIds" :items="managedAgentOptions" value-key="value" multiple aria-label="Allowed agents" class="w-full" />
+              </UFormField>
+              <UButton type="submit" label="Save agent access" :loading="busy === 'managed-agents'" :disabled="Boolean(busy)" />
+            </form>
+            <template v-else>
             <p class="text-xs text-muted">{{ connection.ownership==='server'?'Server-owned':'Personal' }} · {{ connection.endpoint ?? connection.providerId }} · revision {{ connection.revision }}</p>
             <p class="text-xs text-muted">{{ connection.checkedAt?'Last checked '+new Date(connection.checkedAt).toLocaleString():'Not checked yet' }} · {{ connection.hasCredential?'Credential saved (hidden)':'No credential' }}</p>
             <p v-if="connection.description" class="text-sm text-muted">{{ connection.description }}</p>
@@ -109,6 +140,7 @@ async function remove(){const c=removeTarget.value;if(!c)return;await action(c.i
             <p v-if="connection.lastError" class="text-sm text-warning">Refresh or reconnect this source. Status: {{ connection.lastError }}</p>
             <p v-if="connection.credentialExpiresAt" class="text-xs text-muted">Credential expiry: {{ new Date(connection.credentialExpiresAt).toLocaleString() }}</p>
             <div class="flex flex-wrap gap-2"><UButton label="Edit connection" color="neutral" variant="outline" :disabled="Boolean(busy)" @click="openEditor(connection); selectedConnectionId = null" /><UButton label="Refresh tools" color="neutral" variant="outline" :loading="busy===connection.id" @click="refresh(connection)" /><UButton :label="connection.enabled?'Disable':'Enable'" color="neutral" variant="outline" :disabled="Boolean(busy)||(!connection.enabled&&(!connection.tools.length||!connection.toolNames.length||Boolean(connection.lastError)))" @click="toggle(connection)" /><UButton label="Revoke" color="error" variant="soft" :disabled="Boolean(busy)" @click="removeTarget=connection; selectedConnectionId = null" /></div>
+            </template>
             <details v-for="tool in connection.tools.filter(tool=>connection.toolNames.includes(tool.remoteName))" :key="tool.name" class="min-w-0 rounded border border-default p-3"><summary class="cursor-pointer break-all text-sm">{{ tool.remoteName }} · read-only</summary><p class="mt-2 break-words text-sm text-muted">{{ tool.description }}</p><p class="mt-2 break-all text-xs text-muted">{{ tool.name }} · {{ tool.hash }}</p><pre class="mt-2 max-h-64 overflow-auto text-xs">{{ JSON.stringify(tool.parameters,null,2) }}</pre></details>
             </template>
           </article></template></SettingsEditor>

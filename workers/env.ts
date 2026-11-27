@@ -149,6 +149,8 @@ export type ZugoidEnv = {
   PARTNER_DISPLAY_NAME?: string
   /** HTTPS origin of the app that handles sign-in started from this Server. */
   PARTNER_LOGIN_ORIGIN?: string
+  /** Per-studio Platform secret for installing and renewing the managed Unot MCP connection. */
+  UNOT_STUDIO_MCP_KEY?: string
   /** The Host a proxy rewrites this Server's requests to, for a runtime that picks the Worker by Host: served as PUBLIC_ORIGIN. */
   ZUGOID_INTERNAL_HOST?: string
   ADMIN_PASSWORD?: string

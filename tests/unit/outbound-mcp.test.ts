@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ids, mcpFixture, remoteMcp, grant } from '../helpers/outbound-mcp'
-import { mcpConnections, saveMcpConnection, refreshMcpConnection, admitMcpConnections, mcpRunTools } from '../../server/utils/outbound-mcp'
+import { mcpConnections, saveMcpConnection, refreshMcpConnection, deleteMcpConnection, updateManagedMcp, admitMcpConnections, mcpRunTools } from '../../server/utils/outbound-mcp'
 import { toolsForRun, executeRunTool } from '../../server/utils/agent-tools'
 import { runAuthorization } from '../../server/utils/agent-run-service'
 import { Permission, rolePermissions } from '../../shared/permissions'
-import { UNOT_DRAFT_PROVIDER } from '../../shared/outbound-mcp'
+import { UNOT_DRAFT_PROVIDER, UNOT_STUDIO_MCP_NAME } from '../../shared/outbound-mcp'
 
 let f: ReturnType<typeof mcpFixture>, remote: ReturnType<typeof remoteMcp>
 beforeEach(() => { f = mcpFixture(); remote = remoteMcp() })
@@ -97,6 +97,40 @@ it('only allows reviewed Unot writes under the author’s personal grant on a pa
   await expect(executeRunTool(f.env, mixed.run.id, { callId: 'mixed-save', name: owner.tool.name, arguments: { id: 'catcandy' } }, () => {})).rejects.toMatchObject({ statusCode: 403 })
   f.env.PARTNER_SIGNIN_KEY = undefined
   expect((await admitMcpConnections(f.env, owner.authorization)).map(cap => cap.id)).toEqual([docs.id])
+})
+it('protects the deployed Unot credential and preserves owner-selected agents during rotation', async () => {
+  const platformKey = 'test-studio-deployment-key-for-managed-mcp'
+  const actor = await f.actor()
+  f.env.PUBLIC_ORIGIN = 'https://00000000-0000-4000-8000-000000000001-studio-dev.unot.app'
+  f.env.PARTNER_SIGNIN_KEY = 'example-unot-partner-key-longer-than-32-characters'
+  remote.state.extraTools = [{ name: 'game_sdk', inputSchema: remote.state.schema }]
+  const token = (digit: string) => `us1.${ids.server}.9999999999.${digit.repeat(64)}`
+  const input = f.input({ name: UNOT_STUDIO_MCP_NAME, ownership: 'member', providerId: UNOT_DRAFT_PROVIDER, toolNames: ['game_sdk'],
+    credential: token('a'), credentialExpiresAt: new Date(Date.now() + 3600000).toISOString(), grants: { agentIds: [ids.agent], memberIds: [], roleIds: [] } })
+  const connection = await f.connect(input)
+  f.env.UNOT_STUDIO_MCP_KEY = platformKey
+  expect((await mcpConnections(f.env, actor)).connections[0]).toMatchObject({ id: connection.id, managedByDeployment: true })
+  await expect(saveMcpConnection(f.env, actor, input)).rejects.toMatchObject({ statusCode: 403 })
+  await expect(saveMcpConnection(f.env, actor, { ...input, credential: null }, connection.id)).rejects.toMatchObject({ statusCode: 403 })
+  await expect(deleteMcpConnection(f.env, actor, connection.id)).rejects.toMatchObject({ statusCode: 403 })
+  await expect(refreshMcpConnection(f.env, actor, connection.id)).rejects.toMatchObject({ statusCode: 403 })
+  const replacement = { credential: token('b'), credentialExpiresAt: new Date(Date.now() + 7200000).toISOString() }
+  await expect(updateManagedMcp(f.env, actor, connection.id, replacement)).rejects.toMatchObject({ statusCode: 403 })
+  await expect(updateManagedMcp(f.env, actor, connection.id, replacement, platformKey.replace('test', 'fake'))).rejects.toMatchObject({ statusCode: 403 })
+  await expect(updateManagedMcp(f.env, await f.actor(ids.member), connection.id, { agentIds: [ids.agent] })).rejects.toMatchObject({ statusCode: 404 })
+  await expect(updateManagedMcp(f.env, actor, connection.id, { agentIds: [ids.member] })).rejects.toMatchObject({ statusCode: 400 })
+  const before = await toolCall(connection.id)
+  expect(before.tools.descriptors).toHaveLength(1)
+  await updateManagedMcp(f.env, actor, connection.id, { agentIds: [] })
+  f.db.prepare("UPDATE mcp_outbound_connections SET enabled=0,last_error='credentials_rejected' WHERE id=?").run(connection.id)
+  const updated = await updateManagedMcp(f.env, actor, connection.id, replacement, platformKey)
+  expect(updated).toMatchObject({ enabled: true, grants: { agentIds: [] }, credentialExpiresAt: replacement.credentialExpiresAt })
+  expect(JSON.stringify(updated)).not.toContain(replacement.credential)
+  expect(await admitMcpConnections(f.env, before.authorization)).toEqual([])
+  await updateManagedMcp(f.env, actor, connection.id, { agentIds: [ids.agent] })
+  const after = await toolCall(connection.id)
+  await after.tools.call(after.tool.name, { query: 'SDK' })
+  expect(remote.calls.filter(call => call.method === 'tools/call').at(-1)?.authorization).toBe('Bearer ' + replacement.credential)
 })
 it('requires the dedicated Role grant and refuses forged external calls', async () => {
   await f.connect()

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 
 export const UNOT_DRAFT_PROVIDER = 'unot-dev-games'
+export const UNOT_STUDIO_MCP_NAME = 'Unot Studio Games'
+export const STUDIO_MCP_KEY_HEADER = 'x-zugoid-studio-mcp-key'
 export const unotDraftWrites: readonly string[] = ['save_draft', 'playtest_draft']
 export function unotDraftOrigin(origin: string | undefined) {
   if (!origin) return false
@@ -68,6 +70,13 @@ export const mcpConnectionInput = z.object({
   credentialExpiresAt: z.string().datetime({ offset: true }).nullable().default(null),
 }).strict()
 export type McpConnectionInput = z.input<typeof mcpConnectionInput>
+export const managedMcpUpdate = z.union([
+  z.object({ agentIds: ids }).strict(),
+  z.object({
+    credential: z.string().regex(/^us1\.[0-9a-f-]{36}\.[0-9]{10}\.[0-9a-f]{64}$/u),
+    credentialExpiresAt: z.iso.datetime(),
+  }).strict(),
+])
 export type McpConnectionGrant = McpConnectionInput['grants']
 export type McpToolSnapshot = { name: string; remoteName: string; description: string; parameters: Record<string, unknown>; hash: string; declaredReadOnly?: boolean }
 export type McpAuthKind = 'none' | 'bearer' | 'headers'
@@ -75,6 +84,7 @@ export type McpConnectionDTO = {
   id: string; name: string; providerId: string; endpoint: string | null; description: string; authKind: McpAuthKind; ownership: 'server' | 'member'; enabled: boolean; revision: number
   grants: McpConnectionGrant; toolNames: string[]; tools: McpToolSnapshot[]; hasCredential: boolean
   credentialExpiresAt: string | null; checkedAt: string | null; lastError: string | null
+  managedByDeployment?: boolean
 }
 
 /**
