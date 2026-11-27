@@ -1004,6 +1004,7 @@ export type SetupHealth = {
   ownerSetup: boolean
   /** A partner's platform made this Server: people open it signed in from the partner's app, not with a password. */
   partner?: boolean
+  partnerLoginName?: string
   adminEnv?: boolean
   appName: string
   iconUrl?: string | null

@@ -6,5 +6,5 @@ export default defineNuxtRouteMiddleware(async to => {
     await session.refresh(fetcher)
   }
   if (session.user) { const next = typeof to.query.return_to === 'string' ? to.query.return_to : '/'; return navigateTo(next.startsWith('/') && !next.startsWith('//') ? next : '/', { external: next.startsWith('/api/auth/connection/authorize?') }) }
-  if (session.health && !session.health.ready) return navigateTo('/setup')
+  if (session.health && !session.health.ready && !(to.path === '/login' && session.health.ok && session.health.partnerLoginName)) return navigateTo('/setup')
 })

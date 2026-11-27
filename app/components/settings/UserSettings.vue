@@ -28,6 +28,7 @@ const confirmLogout = ref(false)
 const savingName = ref(false)
 const accountProviders = ref<string[]>([])
 const partnerName = ref('')
+const signedInWithPartner = ref(false)
 const hasPassword = computed(() => accountProviders.value.includes('credential'))
 
 const schema = z.object({ displayName: z.string().min(1).max(80) })
@@ -70,17 +71,19 @@ watch(open, async (v) => {
     password.confirm = ''
     revealEmail.value = false
     try {
-      const accounts = await api<{ providers: string[], partnerName?: string }>('/api/auth/accounts')
+      const accounts = await api<{ providers: string[], partnerName?: string, signedInWithPartner?: boolean }>('/api/auth/accounts')
       accountProviders.value = accounts.providers
       partnerName.value = accounts.partnerName ?? ''
+      signedInWithPartner.value = accounts.signedInWithPartner ?? Boolean(accounts.partnerName)
     }
     catch {
       accountProviders.value = []
       partnerName.value = ''
+      signedInWithPartner.value = false
     }
     await push.refresh()
   }
-})
+}, { immediate: import.meta.client })
 
 const groups = computed(() => [
   {
@@ -333,7 +336,7 @@ const showServers = import.meta.client ? window.__ZUGOID_NATIVE_SHOW_SERVERS__ :
             </div>
             <template v-if="partnerName">
               <USeparator />
-              <p class="text-sm text-muted">Signed in through {{ partnerName }}</p>
+              <p class="text-sm text-muted">{{ signedInWithPartner ? 'Signed in with' : 'Linked to' }} {{ partnerName }}</p>
             </template>
             <USeparator v-if="email" />
             <div v-if="email" class="flex items-center justify-between gap-3">
@@ -388,6 +391,7 @@ const showServers = import.meta.client ? window.__ZUGOID_NATIVE_SHOW_SERVERS__ :
 
     <template v-else-if="section === 'profile'">
       <h1 class="text-xl font-semibold text-highlighted mb-5">Profile</h1>
+      <p v-if="signedInWithPartner && partnerName" class="mb-5 text-sm text-muted">Signed in with {{ partnerName }}</p>
       <div class="grid gap-8 lg:grid-cols-[1fr_320px]">
         <div class="space-y-8 min-w-0">
           <section>

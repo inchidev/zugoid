@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { z } from 'zod'
 import { APIError, createAuthEndpoint } from 'better-auth/api'
 import { setSessionCookie } from 'better-auth/cookies'
@@ -6,11 +7,13 @@ import { authAccounts, authSessions, authUsers, roles, server, users } from '../
 import { newId, nowIso } from '../../shared/ids'
 import { getServerId } from '../../shared/server-id'
 import { readServerSetting } from '../../shared/server-settings'
+import { partnerDestination } from '../../shared/partner-destination'
 import type { ZugoidEnv } from '../../workers/env'
 import { signalMembersChanged } from '../../workers/member-events'
 import { generatedUsername, placeholderEmail } from './account-identity'
 import { provisionServerIn } from './bootstrap'
 import { getDb } from './db'
+import { requireFiles } from './cf'
 import { revalidateLiveRooms } from './live'
 import { writeAudit } from './messages'
 
@@ -26,6 +29,12 @@ export const PARTNER_PROVIDER = 'partner'
 /** The longest a ticket may live, and the clock difference forgiven. */
 const MAX_LIFETIME_SECONDS = 120
 const SKEW_SECONDS = 30
+const LOGIN_COOKIE = '__Host-zugoid-partner-login'
+const LOGIN_TTL = 600
+const nonce = z.string().regex(/^[a-f0-9]{32}$/u)
+const photoHash = z.string().regex(/^[a-f0-9]{64}$/u)
+const directLogin = z.object({ state: nonce, photo: photoHash.nullable() })
+const loginCookie = z.object({ state: nonce, next: z.string() })
 
 export type PartnerTicket = {
   act: 'sign-in' | 'remove'
@@ -34,6 +43,7 @@ export type PartnerTicket = {
   role: 'owner' | 'member'
   jti: string
   exp: number
+  direct?: z.infer<typeof directLogin>
 }
 
 const claimsSchema = z.object({
@@ -46,11 +56,21 @@ const claimsSchema = z.object({
   jti: z.string().regex(/^[\w-]{16,64}$/u),
   iat: z.number().int(),
   exp: z.number().int(),
+  direct: directLogin.optional(),
 })
 
 export function partnerSignInKey(env: Pick<ZugoidEnv, 'PARTNER_SIGNIN_KEY'>): string | null {
   const key = env.PARTNER_SIGNIN_KEY?.trim() || ''
   return key.length >= 32 ? key : null
+}
+
+export function partnerLogin(env: ZugoidEnv) {
+  const label = env.PARTNER_DISPLAY_NAME?.trim().slice(0, 60)
+  const origin = env.PARTNER_LOGIN_ORIGIN
+  const server = z.uuid().safeParse(env.SERVER_ID)
+  if (!label || !origin || !server.success || !partnerSignInKey(env)) return null
+  const url = URL.parse(origin)
+  return url?.protocol === 'https:' && url.origin === origin ? { label, origin, server: server.data } : null
 }
 
 function base64urlBytes(value: string): Uint8Array<ArrayBuffer> | null {
@@ -101,10 +121,69 @@ export async function spendPartnerTicket(env: Pick<ZugoidEnv, 'DB'>, ticket: Par
   await env.DB.prepare('DELETE FROM auth_verifications WHERE identifier = ? AND expires_at < ?').bind('partner-ticket', now).run()
   try {
     await env.DB.prepare('INSERT INTO auth_verifications (id, identifier, value, expires_at) VALUES (?, ?, ?, ?)')
-      .bind(`partner-ticket:${ticket.jti}`, 'partner-ticket', ticket.act, (ticket.exp + SKEW_SECONDS) * 1000).run()
+      .bind(`partner-ticket:${ticket.direct?.state ?? ticket.jti}`, 'partner-ticket', ticket.act,
+        ticket.direct ? now + LOGIN_TTL * 1000 : (ticket.exp + SKEW_SECONDS) * 1000).run()
     return true
   }
   catch { return false }
+}
+
+const sessionMarker = 'partner-session'
+
+export async function isPartnerSession(env: ZugoidEnv, id: string) {
+  return Boolean(await env.DB.prepare('SELECT id FROM auth_verifications WHERE id = ?')
+    .bind(`${sessionMarker}:${id}`).first('id'))
+}
+
+async function markPartnerSession(env: ZugoidEnv, session: { id: string, expiresAt: Date }) {
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM auth_verifications WHERE identifier = ? AND expires_at < ?
+      AND NOT EXISTS (SELECT 1 FROM auth_sessions WHERE id = substr(auth_verifications.id, ?) AND expires_at > ?)`)
+      .bind(sessionMarker, Date.now(), sessionMarker.length + 2, Date.now()),
+    env.DB.prepare('INSERT INTO auth_verifications (id, identifier, value, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(`${sessionMarker}:${session.id}`, sessionMarker, 'partner', session.expiresAt.getTime()),
+  ])
+}
+
+/** Keep the partner's profile on the already linked Account. Avatars are served by the usual member-only route. */
+async function syncPartnerProfile(env: ZugoidEnv, userId: string, name: string, photo: string | null, origin: string) {
+  const db = getDb(env.DB)
+  const row = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0]
+  if (!row) return false
+  const prefix = `${await getServerId(env.DB)}/users/${userId}/partner-avatar-`
+  const previous = row.avatarR2Key?.startsWith(prefix) ? row.avatarR2Key : null
+  let avatarR2Key = row.avatarR2Key
+  if (photo) {
+    const key = `${prefix}${photo}.webp`
+    if (key !== previous) {
+      try {
+        const response = await fetch(`${origin}/b/${photo}.webp`, { redirect: 'manual', signal: AbortSignal.timeout(4000) })
+        if (response.ok && response.headers.get('content-type') === 'image/webp') {
+          const bytes = await response.arrayBuffer()
+          const hash = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))
+          if (bytes.byteLength <= 262_144 && hash === photo) {
+            await requireFiles(env).put(key, bytes, { httpMetadata: { contentType: 'image/webp' } })
+            avatarR2Key = key
+          }
+        }
+      }
+      catch { /* Keep the current picture if the provider or storage is temporarily unavailable. */ }
+    }
+  }
+  else if (previous) avatarR2Key = null
+  const displayName = name || row.displayName
+  if (displayName === row.displayName && avatarR2Key === row.avatarR2Key) return false
+  await db.batch([
+    db.update(users).set({ displayName, avatarR2Key, updatedAt: nowIso() }).where(eq(users.id, userId)),
+    db.update(authUsers).set({ name: displayName, updatedAt: new Date() }).where(eq(authUsers.id, userId)),
+  ])
+  return true
+}
+
+function readLoginCookie(value: string | null) {
+  if (!value) return null
+  try { return loginCookie.parse(JSON.parse(value)) }
+  catch { return null }
 }
 
 async function linkedUserId(env: ZugoidEnv, subject: string): Promise<string | null> {
@@ -216,20 +295,41 @@ export function partnerSignIn(env: ZugoidEnv, waitUntil: (promise: Promise<unkno
   return {
     id: 'zugoid-partner-sign-in',
     endpoints: {
+      partnerStart: createAuthEndpoint(
+        '/partner/start',
+        { method: 'POST', body: z.object({ next: z.string().max(1024).optional() }), requireHeaders: true },
+        async (ctx) => {
+          const login = partnerLogin(env)
+          if (!login) throw new APIError('NOT_FOUND')
+          const state = crypto.randomUUID().replaceAll('-', '')
+          const next = partnerDestination(ctx.body.next ?? null)
+          ctx.setCookie(LOGIN_COOKIE, JSON.stringify({ state, next }), { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: LOGIN_TTL })
+          return ctx.json({ url: `${login.origin}/app/?s=zugoid_${login.server}.${state}` })
+        },
+      ),
       partnerSignIn: createAuthEndpoint(
         '/partner/sign-in',
         { method: 'POST', body: z.object({ ticket: z.string().min(16).max(4096) }), requireHeaders: true },
         async (ctx) => {
           const ticket = await readPartnerTicket(env, ctx.body.ticket, 'sign-in')
-          if (!ticket || !await spendPartnerTicket(env, ticket)) {
+          const login = partnerLogin(env)
+          const browser = ticket?.direct ? readLoginCookie(ctx.getCookie(LOGIN_COOKIE)) : null
+          if (!ticket || (ticket.direct && (!login || browser?.state !== ticket.direct.state)) || !await spendPartnerTicket(env, ticket)) {
             throw new APIError('UNAUTHORIZED', { message: 'This link is invalid or expired. Open the server again from the app.' })
           }
           const userId = await admitPartnerPerson(env, ticket, waitUntil)
+          if (ticket.direct && login) {
+            if (await syncPartnerProfile(env, userId, ticket.name, ticket.direct.photo, login.origin)) {
+              waitUntil(signalMembersChanged(env, await getServerId(env.DB)))
+            }
+            ctx.setCookie(LOGIN_COOKIE, '', { httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 0 })
+          }
           const user = await ctx.context.internalAdapter.findUserById(userId)
           if (!user) throw new APIError('INTERNAL_SERVER_ERROR', { message: 'Account missing' })
           const session = await ctx.context.internalAdapter.createSession(user.id)
+          if (login) await markPartnerSession(env, session)
           await setSessionCookie(ctx, { user, session })
-          return ctx.json({ ok: true })
+          return ctx.json({ ok: true, ...(browser ? { next: partnerDestination(browser.next) } : {}) })
         },
       ),
     },
