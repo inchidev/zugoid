@@ -250,8 +250,8 @@ watch(nav.inviteOpen, (open) => {
               class="flex w-full flex-col items-start justify-between max-md:aspect-square max-md:rounded-xl max-md:border max-md:border-default max-md:bg-accented max-md:p-3.5 md:items-center md:justify-center md:gap-1.5"
               :class="[compact ? 'md:min-h-11' : 'md:aspect-square md:min-h-12', { 'max-md:hidden': index > 4 }]"
             >
-              <USkeleton class="size-8 md:size-5" />
-              <USkeleton class="h-2 w-10" :class="{ 'md:hidden': compact }" />
+              <USkeleton class="size-12 md:size-5" />
+              <USkeleton class="h-2 w-10 max-md:order-first" :class="{ 'md:hidden': compact }" />
             </div>
           </div>
           <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="min-h-11 w-full justify-center rounded-lg" @click="membersQ.refetch()" />
@@ -277,10 +277,10 @@ watch(nav.inviteOpen, (open) => {
                   ]"
                   @click="emit('selectSection', item.path)"
                 >
-                  <UIcon :name="item.icon" class="size-8 shrink-0 md:size-[22px]" aria-hidden="true" />
-                  <span class="min-w-0 text-[15px] leading-tight font-semibold wrap-break-word md:max-w-full md:truncate md:text-[11px] md:leading-3 md:font-medium" :class="{ 'md:sr-only': compact }">{{ item.label }}</span>
-                  <span v-if="item.count" class="absolute end-3 top-3 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted max-md:group-aria-[current=page]:bg-default max-md:group-aria-[current=page]:text-default md:end-1 md:top-1" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
-                  <span v-else-if="item.dot" class="absolute end-3.5 top-3.5 size-2 rounded-full bg-primary max-md:group-aria-[current=page]:bg-default md:end-3 md:top-1.5 md:size-1.5" aria-hidden="true" />
+                  <UIcon :name="item.icon" class="size-12 shrink-0 md:size-[22px]" aria-hidden="true" />
+                  <span class="min-w-0 text-[15px] leading-tight font-semibold wrap-break-word max-md:order-first md:max-w-full md:truncate md:text-[11px] md:leading-3 md:font-medium" :class="{ 'md:sr-only': compact }">{{ item.label }}</span>
+                  <span v-if="item.count" class="absolute end-3 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted max-md:bottom-3 max-md:group-aria-[current=page]:bg-default max-md:group-aria-[current=page]:text-default md:end-1 md:top-1" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
+                  <span v-else-if="item.dot" class="absolute end-3.5 size-2 rounded-full bg-primary max-md:bottom-3.5 max-md:group-aria-[current=page]:bg-default md:end-3 md:top-1.5 md:size-1.5" aria-hidden="true" />
                 </NuxtLink>
               </UTooltip>
             </li>
