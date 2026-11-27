@@ -73,7 +73,7 @@ it('shows the original immediately for a freshly created, cached thread without 
 
 describe('reads', () => {
   let generation = 0
-  let attentionReady: Promise<void> | undefined
+  let attentionReady: Promise<undefined> | undefined
   const api = vi.fn(async (url: string) => {
     if (url.endsWith('/attention')) {
       await attentionReady
@@ -92,7 +92,7 @@ describe('reads', () => {
   const reads = (list: VueWrapper) => (list.emitted('read') ?? []) as Array<[string, number]>
 
   it('marks an opened email read before the reader scrolls, without clearing newer messages off screen', async () => {
-    const attention = Promise.withResolvers<void>()
+    const attention = Promise.withResolvers<undefined>()
     attentionReady = attention.promise
     const list = open(true)
     const scroller = list.get('[role="log"]').element as HTMLElement
@@ -103,7 +103,7 @@ describe('reads', () => {
     })
     await settle()
     expect(reads(list)).toEqual([])
-    attention.resolve()
+    attention.resolve(undefined)
     await settle()
     expect(reads(list)).toEqual([['m1', 0]])
 
