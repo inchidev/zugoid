@@ -21,6 +21,11 @@ const ui = useUiStore()
 const route = useRouter().currentRoute
 const mounted = useMounted()
 const compact = computed(() => mounted.value && ui.sectionIconsOnly)
+const tooltipPath = ref<string | null>(null)
+
+function updateSectionTooltip(path: string, open: boolean) {
+  if (open || tooltipPath.value === path) tooltipPath.value = open ? path : null
+}
 const qc = useQueryClient()
 const toast = useToast()
 const session = useSessionStore()
@@ -233,7 +238,11 @@ watch(nav.inviteOpen, (open) => {
         </div>
         <LayoutSpaceSwitcher :server-id="serverId" />
 
-        <nav :aria-label="showSections ? 'More sections' : 'Server views'" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 md:px-1">
+        <nav
+          :aria-label="showSections ? 'More sections' : 'Server views'"
+          class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 md:px-1"
+          @keydown.esc="tooltipPath = null"
+        >
           <div v-if="membersQ.isPending.value" class="space-y-1" aria-label="Loading views" aria-busy="true">
             <div v-for="index in (compact ? 9 : 7)" :key="index" class="flex min-h-12 w-full items-center gap-3 px-3 md:flex-col md:justify-center md:gap-1.5 md:px-0" :class="compact ? 'md:min-h-11' : 'md:aspect-square'">
               <USkeleton class="size-5" />
@@ -243,7 +252,13 @@ watch(nav.inviteOpen, (open) => {
           <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="min-h-11 w-full justify-center rounded-lg" @click="membersQ.refetch()" />
           <ul v-else class="space-y-1">
             <li v-for="item in views" :key="item.path" :class="{ 'max-md:hidden': isMobilePrimarySection(item.path) }">
-              <UTooltip :text="item.label" :disabled="!compact || showSections" :content="{ side: 'right' }">
+              <UTooltip
+                :text="item.label"
+                :disabled="!compact || showSections"
+                :open="compact && !showSections && tooltipPath === item.path"
+                :content="{ side: 'right' }"
+                @update:open="updateSectionTooltip(item.path, $event)"
+              >
                 <NuxtLink
                   :to="item.to"
                   :aria-current="isViewActive(item.path) ? 'page' : undefined"
