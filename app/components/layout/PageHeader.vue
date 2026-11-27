@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * The 48px bar at the top of every server page. On phones it carries the
- * button that opens the navigation drawer, so no page is a dead end.
+ * The 48px bar at the top of every Server page. On phones it carries the
+ * button for the current section menu.
  */
 defineProps<{
   title?: string

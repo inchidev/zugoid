@@ -54,7 +54,7 @@ export const useUiStore = defineStore('ui', () => {
 
   const rightPanelOpen = ref(true)
   const rightPanelTab = ref<RightPanelTab>('members')
-  const mobilePane = ref<'channels' | 'chat' | 'members'>('chat')
+  const mobilePane = ref<'channels' | 'sections' | 'chat' | 'members'>('chat')
   const composerStates = import.meta.client ? useSafeLocalStorage<Record<string, ComposerState>>(`zugoid:drafts:${scope}`, {}) : ref<Record<string, ComposerState>>({})
   const liveSetupOpen = ref(false)
   const threadId = ref<string | null>(null)
@@ -66,6 +66,9 @@ export const useUiStore = defineStore('ui', () => {
   /** The header search covers the open conversation or every conversation on the Server. */
   const searchScope = ref<'conversation' | 'server'>('conversation')
   const memberTab = ref<'all' | 'online'>('all')
+  const sectionIconsOnly = import.meta.client
+    ? useSafeLocalStorage('zugoid:section-icons-only', false)
+    : ref(false)
   const channelPaneWidth = import.meta.client
     ? useSafeLocalStorage('df:channel-pane-width', 240)
     : ref(240)
@@ -160,6 +163,7 @@ export const useUiStore = defineStore('ui', () => {
     searchOpen,
     searchScope,
     memberTab,
+    sectionIconsOnly,
     channelPaneWidth,
     rightPanelWidth,
     mailListWidth,

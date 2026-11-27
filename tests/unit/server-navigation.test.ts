@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apiModuleSection, chatNavigationTarget, hasServerNavigationMenu, serverNavigationSection } from '../../shared/server-navigation'
+import { apiModuleSection, chatNavigationTarget, hasServerNavigationMenu, isMobilePrimarySection, serverNavigationSection } from '../../shared/server-navigation'
 
 describe('Server rail destinations', () => {
   it('keeps channels, DMs and threads in Chat', () => {
@@ -53,6 +53,15 @@ describe('Server rail destinations', () => {
     expect(apiModuleSection('/api/schedules')).toBe('schedules')
     expect(apiModuleSection('/api/schedules/id/occurrences')).toBe('schedules')
     expect(apiModuleSection('/api/agents')).toBe('agents')
+  })
+
+  it('keeps the mobile primary tabs active on their nested routes', () => {
+    for (const path of ['/inbox', '/channels/c/threads/t', '/projects/board', '/items/id']) {
+      expect(isMobilePrimarySection(path)).toBe(true)
+    }
+    for (const path of ['/schedules', '/runs/id', '/mail/mb/inbox', '/agents/id', '/media', '/settings']) {
+      expect(isMobilePrimarySection(path)).toBe(false)
+    }
   })
 
   it('leaves settings with only the compact rail', () => {

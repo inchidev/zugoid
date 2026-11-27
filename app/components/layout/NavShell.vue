@@ -3,18 +3,24 @@ import ServerAvatar from '../../../packages/client-ui/ServerAvatar.vue'
 import { navigateTo } from '#imports'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { ChannelCategoryDTO as Category, ChannelDTO as Ch, MailboxDTO, ServerDTO as W, MemberDTO as M } from '~~/shared/types'
+import type { ChannelCategoryDTO, ChannelDTO, ServerDTO } from '~~/shared/types'
+import { sectionLinkLabel, type useServerSectionViews } from '~/composables/useServerSectionViews'
 import { Permission } from '~~/shared/permissions'
-import { BOARD_ROUTE, channelPath, mailPath } from '~~/shared/paths'
-import { useClipboard } from '@vueuse/core'
-import { chatNavigationTarget, hasServerNavigationMenu, serverNavigationSection } from '~~/shared/server-navigation'
+import { channelPath } from '~~/shared/paths'
+import { useClipboard, useMounted } from '@vueuse/core'
+import { hasServerNavigationMenu, isMobilePrimarySection, serverNavigationSection } from '~~/shared/server-navigation'
 import { publicIconPath } from '~~/shared/server-appearance'
-import { pausedSections } from '~~/shared/features'
 
-const props = defineProps<{ serverId: string }>()
+const props = defineProps<{
+  serverId: string
+  navigation: ReturnType<typeof useServerSectionViews>
+  showSections: boolean
+}>()
 const emit = defineEmits<{ selectSection: [path: string]; selectResource: [navigates: boolean] }>()
 const ui = useUiStore()
-const route = useRoute()
+const route = useRouter().currentRoute
+const mounted = useMounted()
+const compact = computed(() => mounted.value && ui.sectionIconsOnly)
 const qc = useQueryClient()
 const toast = useToast()
 const session = useSessionStore()
@@ -24,35 +30,14 @@ const commands = useCommandPalette()
 const { copy } = useClipboard()
 const { api, serverUrl } = useApi()
 
-const membersQ = useQuery({
-  queryKey: computed(() => ['members', props.serverId]),
-  queryFn: () => api<{ members: M[] }>(`/api/servers/${props.serverId}/members`),
-})
-const { can, canAnyProject } = usePermissions(computed(() => membersQ.data.value?.members))
+const { membersQ, channels, categories, dmsQ, views, can, showsTasks, showsFactory } = props.navigation
 const { activeSpace, canSwitch: hasSpaces, isSpaceAdmin } = useSpaces(() => props.serverId)
 
 const serverQ = useQuery({
   queryKey: computed(() => ['server', props.serverId]),
-  queryFn: () => api<{ server: W }>(`/api/servers/${props.serverId}`),
+  queryFn: () => api<{ server: ServerDTO }>(`/api/servers/${props.serverId}`),
   refetchInterval: 60_000,
 })
-const channelsQ = useQuery({
-  queryKey: computed(() => ['channels', props.serverId]),
-  queryFn: () => api<{ categories: Category[]; channels: Ch[] }>(`/api/servers/${props.serverId}/channels`),
-})
-const dmsQ = useQuery({
-  queryKey: ['dms'],
-  queryFn: () => api<{ channels: Ch[] }>('/api/dms'),
-})
-const mailboxesQ = useQuery({
-  queryKey: ['mailboxes'],
-  queryFn: () => api<{ mailboxes: MailboxDTO[] }>('/api/mail/mailboxes'),
-  refetchInterval: 15_000,
-})
-
-const channels = computed(() => channelsQ.data.value?.channels ?? [])
-const categories = computed(() => channelsQ.data.value?.categories ?? [])
-const mailboxes = computed(() => mailboxesQ.data.value?.mailboxes ?? [])
 const connectedPath = computed(() => {
   const id = live.currentChannelId
   if (!id) return '/channels'
@@ -60,37 +45,8 @@ const connectedPath = computed(() => {
   return conversation ? channelPath(conversation) : `/channels/${id}`
 })
 
-const { attention } = useInbox(computed(() => props.serverId))
-const section = computed(() => serverNavigationSection(route.path))
-const hasMenu = computed(() => hasServerNavigationMenu(route.path))
-const chatUnread = computed(() => [...channels.value, ...(dmsQ.data.value?.channels ?? [])].some(channel => channel.unread))
-const chatTarget = computed(() => {
-  const last = ui.last()
-  return chatNavigationTarget([...channels.value, ...(dmsQ.data.value?.channels ?? [])], last?.serverId === props.serverId ? last.channelId : undefined)
-})
-const mailUnread = computed(() => mailboxes.value.some(mailbox => mailbox.unreadCount > 0))
-const customersTarget = computed(() => {
-  const first = mailboxes.value[0]
-  return first ? mailPath(first.channelId) : '/customers'
-})
-const hiddenSections = useHiddenSections()
-const showsTasks = computed(() => canAnyProject(Permission.readTasks))
-const showsFactory = computed(() => canAnyProject(Permission.readProjects))
-const views = computed(() => [
-  { label: 'Inbox', icon: 'i-ph-tray', to: '/inbox', path: '/inbox', count: attention.value, dot: false },
-  ...(can(Permission.manageSchedules) ? [{ label: 'Scheduled', icon: 'i-ph-clock', to: '/schedules', path: '/schedules', count: 0, dot: false }] : []),
-  { label: 'Chat', icon: 'i-ph-chat-circle', to: chatTarget.value, path: '/channels', count: 0, dot: chatUnread.value },
-  ...(showsTasks.value ? [{ label: 'Tasks', icon: 'i-ph-kanban', to: BOARD_ROUTE, path: BOARD_ROUTE, count: 0, dot: false }] : []),
-  ...(showsFactory.value ? [{ label: 'Factory', icon: 'i-ph-git-branch', to: '/projects', path: '/projects', count: 0, dot: false }] : []),
-  { label: 'Customers', icon: 'i-ph-address-book', to: customersTarget.value, path: '/customers', count: 0, dot: mailUnread.value },
-  ...(can(Permission.useAgents) || can(Permission.manageAgents) ? [{ label: 'Agents', icon: 'i-ph-robot', to: '/agents', path: '/agents', count: 0, dot: false }] : []),
-  ...(can(Permission.readData) ? [{ label: 'Data', icon: 'i-ph-stack', to: '/data', path: '/data', count: 0, dot: false }] : []),
-  { label: 'Media', icon: 'i-ph-images', to: '/media', path: '/media', count: 0, dot: false },
-  ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
-].filter((view) => {
-  const section = serverNavigationSection(view.path)!
-  return !pausedSections.has(section) && !hiddenSections.value.has(section)
-}))
+const section = computed(() => serverNavigationSection(route.value.path))
+const hasMenu = computed(() => hasServerNavigationMenu(route.value.path))
 function isViewActive(path: string) {
   return section.value === serverNavigationSection(path)
 }
@@ -180,7 +136,7 @@ async function createChannel() {
   if (!newName.value.trim()) return
   creating.value = true
   try {
-    const res = await api<{ channel: Ch }>(`/api/servers/${props.serverId}/channels`, {
+    const res = await api<{ channel: ChannelDTO }>(`/api/servers/${props.serverId}/channels`, {
       method: 'POST',
       body: {
         name: newName.value.trim().toLowerCase().replace(/\s+/g, '-'),
@@ -207,7 +163,7 @@ async function createCategory() {
   if (!name) return
   creatingCategory.value = true
   try {
-    const res = await api<{ category: Category }>(`/api/servers/${props.serverId}/categories`, {
+    const res = await api<{ category: ChannelCategoryDTO }>(`/api/servers/${props.serverId}/categories`, {
       method: 'POST',
       body: { name },
     })
@@ -253,58 +209,89 @@ watch(nav.inviteOpen, (open) => {
 <template>
   <div class="relative flex h-full min-h-0 w-full select-none flex-col">
     <div class="flex min-h-0 flex-1">
-      <div class="flex w-[72px] shrink-0 flex-col border-e border-default bg-muted pb-[var(--df-safe-area-bottom)] pt-[var(--df-safe-area-top)] dark:bg-black">
-        <UDropdownMenu :items="serverItems" :ui="{ content: 'w-56' }">
-          <button
-            type="button"
-            class="group flex h-12 w-full shrink-0 items-center justify-center focus-visible:outline-2 focus-visible:outline-primary"
-            :aria-label="serverName || 'Server menu'"
-            :title="serverName || 'Server menu'"
-          >
-            <span class="server-avatar flex size-10 items-center justify-center rounded-xl transition-colors group-data-[state=open]:bg-accented">
-              <UAvatar v-if="serverIconUrl" size="lg" :src="serverIconUrl" :alt="serverName" class="size-8 rounded-lg" />
-              <ServerAvatar v-else-if="railShown || !showZugoid" :name="serverName || 'Server'" class="size-8 rounded-lg bg-accented text-xs" />
-              <BrandLogo v-else size="xl" alt="" />
-            </span>
-          </button>
-        </UDropdownMenu>
+      <div
+        class="min-h-0 min-w-0 flex-1 flex-col bg-default md:w-[72px] md:flex-none md:border-e md:border-default md:bg-muted md:pt-[var(--df-safe-area-top)] dark:bg-black"
+        :class="showSections ? 'flex' : 'hidden md:flex'"
+      >
+        <div class="df-top-row flex shrink-0 items-center gap-2 border-b border-default px-3 md:h-auto md:border-0 md:px-0 md:pt-0">
+          <h2 v-if="showSections" tabindex="-1" data-nav-heading class="min-w-0 flex-1 text-base font-semibold text-highlighted outline-none md:hidden">More</h2>
+          <UDropdownMenu :items="serverItems" :ui="{ content: 'w-56' }">
+            <button
+              type="button"
+              class="group flex size-11 shrink-0 items-center justify-center rounded-lg focus-visible:outline-2 focus-visible:outline-primary md:h-12 md:w-full"
+              :aria-label="serverName ? `Server menu, ${serverName}` : 'Server menu'"
+              :title="serverName || 'Server menu'"
+            >
+              <span class="server-avatar flex size-10 items-center justify-center rounded-xl transition-colors group-data-[state=open]:bg-accented">
+                <UAvatar v-if="serverIconUrl" size="lg" :src="serverIconUrl" :alt="serverName" class="size-8 rounded-lg" />
+                <ServerAvatar v-else-if="railShown || !showZugoid" :name="serverName || 'Server'" class="size-8 rounded-lg bg-accented text-xs" />
+                <BrandLogo v-else size="xl" alt="" />
+              </span>
+            </button>
+          </UDropdownMenu>
+          <UButton v-if="showSections" icon="i-ph-x" color="neutral" variant="ghost" class="size-11 justify-center md:hidden" aria-label="Close More" @click="ui.mobilePane = 'chat'" />
+        </div>
         <LayoutSpaceSwitcher :server-id="serverId" />
 
-        <nav aria-label="Server views" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 py-2">
+        <nav :aria-label="showSections ? 'More sections' : 'Server views'" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 md:px-1">
           <div v-if="membersQ.isPending.value" class="space-y-1" aria-label="Loading views" aria-busy="true">
-            <div v-for="index in 7" :key="index" class="flex aspect-square w-full flex-col items-center justify-center gap-1.5"><USkeleton class="size-5" /><USkeleton class="h-2 w-10" /></div>
+            <div v-for="index in (compact ? 9 : 7)" :key="index" class="flex min-h-12 w-full items-center gap-3 px-3 md:flex-col md:justify-center md:gap-1.5 md:px-0" :class="compact ? 'md:min-h-11' : 'md:aspect-square'">
+              <USkeleton class="size-5" />
+              <USkeleton class="h-2 w-10" :class="{ 'md:hidden': compact }" />
+            </div>
           </div>
-          <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="aspect-square w-full justify-center rounded-lg" @click="membersQ.refetch()" />
+          <UButton v-else-if="membersQ.error.value" icon="i-ph-arrow-clockwise" color="neutral" variant="ghost" aria-label="Retry loading views" class="min-h-11 w-full justify-center rounded-lg" @click="membersQ.refetch()" />
           <ul v-else class="space-y-1">
-            <li v-for="item in views" :key="item.path">
-              <NuxtLink
-                :to="item.to"
-                :title="item.label"
-                :aria-current="isViewActive(item.path) ? 'page' : undefined"
-                :aria-label="item.count ? `${item.label}, ${item.count} unread conversations` : item.dot ? `${item.label}, unread` : item.label"
-                class="relative flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-lg px-0.5 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary"
-                :class="isViewActive(item.path) ? 'bg-accented text-highlighted' : 'text-muted hover:bg-elevated hover:text-default'"
-                @click="emit('selectSection', item.path)"
-              >
-                <UIcon :name="item.icon" class="size-[22px] shrink-0" />
-                <span class="max-w-full truncate text-[11px] font-medium leading-3">{{ item.label }}</span>
-                <span v-if="item.count" class="absolute end-1 top-1 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
-                <span v-else-if="item.dot" class="absolute end-3 top-1.5 size-1.5 rounded-full bg-primary" aria-hidden="true" />
-              </NuxtLink>
+            <li v-for="item in views" :key="item.path" :class="{ 'max-md:hidden': isMobilePrimarySection(item.path) }">
+              <UTooltip :text="item.label" :disabled="!compact || showSections" :content="{ side: 'right' }">
+                <NuxtLink
+                  :to="item.to"
+                  :aria-current="isViewActive(item.path) ? 'page' : undefined"
+                  :aria-label="sectionLinkLabel(item)"
+                  class="relative flex min-h-12 w-full items-center gap-3 rounded-lg px-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary md:flex-col md:justify-center md:gap-1 md:px-0.5"
+                  :class="[
+                    compact ? 'md:min-h-11' : 'md:aspect-square',
+                    isViewActive(item.path) ? 'bg-accented text-highlighted' : 'text-muted hover:bg-elevated hover:text-default',
+                  ]"
+                  @click="emit('selectSection', item.path)"
+                >
+                  <UIcon :name="item.icon" class="size-[22px] shrink-0" aria-hidden="true" />
+                  <span class="min-w-0 truncate text-sm font-medium md:max-w-full md:text-[11px] md:leading-3" :class="{ 'md:sr-only': compact }">{{ item.label }}</span>
+                  <span v-if="item.count" class="ms-auto min-w-4 rounded-full bg-primary px-1 text-center text-[10px] leading-4 text-inverted md:absolute md:end-1 md:top-1" aria-hidden="true">{{ item.count > 99 ? '99+' : item.count }}</span>
+                  <span v-else-if="item.dot" class="ms-auto size-1.5 rounded-full bg-primary md:absolute md:end-3 md:top-1.5" aria-hidden="true" />
+                </NuxtLink>
+              </UTooltip>
             </li>
           </ul>
         </nav>
-        <button v-if="!hasMenu && live.connection === 'connected' && live.currentChannelId" type="button" class="mx-2 mb-2 flex h-11 items-center justify-center rounded-md text-success hover:bg-elevated" :aria-label="`Return to ${live.currentTitle || 'live conversation'}`" @click="navigateTo(connectedPath)"><UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-5" /></button>
-
+        <div class="hidden shrink-0 justify-center border-t border-default p-1 md:flex">
+          <UTooltip :text="compact ? 'Show section labels' : 'Hide section labels'" :content="{ side: 'right' }">
+            <UButton
+              icon="i-ph-text-aa"
+              color="neutral"
+              variant="ghost"
+              square
+              class="size-8 justify-center"
+              aria-label="Only show section icons"
+              :aria-pressed="compact"
+              @click="ui.sectionIconsOnly = !ui.sectionIconsOnly"
+            />
+          </UTooltip>
+        </div>
       </div>
 
-      <div v-if="hasMenu" class="flex min-h-0 min-w-0 flex-1 flex-col bg-muted pb-[var(--df-safe-area-bottom)] dark:bg-black" @click.capture="selectResource">
-        <header class="df-top-row flex shrink-0 items-center gap-2 px-3 shadow-[0_1px_0_var(--ui-border)]">
-          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-highlighted">{{ menuTitle }}</h2>
+      <div
+        v-if="hasMenu"
+        class="flex min-h-0 min-w-0 flex-1 flex-col bg-default md:bg-muted dark:bg-black"
+        :class="{ 'max-md:hidden': showSections }"
+      >
+        <header class="df-top-row flex shrink-0 items-center gap-2 border-b border-default px-3">
+          <h2 tabindex="-1" data-nav-heading class="min-w-0 flex-1 truncate text-sm font-semibold text-highlighted outline-none">{{ menuTitle }}</h2>
           <UButton icon="i-ph-magnifying-glass" color="neutral" variant="ghost" class="size-9 justify-center" aria-label="Search and commands (Ctrl or Command K)" title="Search and commands" @click="commands.show()" />
-          <UButton icon="i-ph-x" color="neutral" variant="ghost" class="size-9 justify-center md:hidden" aria-label="Close navigation" @click="ui.mobilePane = 'chat'" />
+          <UButton icon="i-ph-x" color="neutral" variant="ghost" class="size-11 justify-center md:hidden" aria-label="Close section menu" @click="ui.mobilePane = 'chat'" />
         </header>
-        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-3">
+        <LayoutSpaceSwitcher :server-id="serverId" class="md:hidden" />
+        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain py-3" @click.capture="selectResource">
           <nav v-if="section === 'chat'" aria-label="Conversations" class="space-y-4">
             <LayoutChatNav :server-id="serverId" />
             <LayoutDirectMessages :server-id="serverId" kind="human" />
@@ -318,32 +305,25 @@ watch(nav.inviteOpen, (open) => {
           <LayoutCustomersNav v-else-if="section === 'customers'" />
           <LayoutMediaNav v-else-if="section === 'media'" />
         </div>
-        <button
-          v-if="live.connection === 'connected' && live.currentChannelId"
-          type="button"
-          class="pointer-events-auto rounded-lg bg-success/10 px-3 py-2 text-start hover:bg-success/15"
-          @click="navigateTo(connectedPath)"
-        >
-          <p class="flex items-center gap-1.5 text-xs font-semibold text-success"><UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-3.5" />Connected</p>
-          <p class="truncate text-[11px] text-muted">{{ live.currentTitle || 'Live' }}</p>
-        </button>
       </div>
     </div>
-    <LayoutUserPanel v-if="!hasMenu" compact />
     <div
-      v-if="hasMenu"
-      class="pointer-events-none absolute bottom-0 left-0 right-0 z-10 flex flex-col gap-1 px-2 pb-4 pt-8 sm:px-4 sm:pb-6"
+      class="shrink-0 flex-col border-t border-default bg-default px-2 py-2 md:flex md:bg-muted md:pb-[max(0.5rem,var(--df-safe-area-bottom))] dark:bg-black"
+      :class="showSections ? 'flex gap-1' : 'hidden'"
     >
-      <button
+      <UButton
         v-if="live.connection === 'connected' && live.currentChannelId"
-        type="button"
-        class="pointer-events-auto rounded-lg bg-success/10 px-3 py-2 text-start hover:bg-success/15"
-        @click="navigateTo(connectedPath)"
-      >
-        <p class="flex items-center gap-1.5 text-xs font-semibold text-success"><UIcon :name="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'" class="size-3.5" />Connected</p>
-        <p class="truncate text-[11px] text-muted">{{ live.currentTitle || 'Live' }}</p>
-      </button>
-      <LayoutUserPanel class="pointer-events-auto" />
+        :icon="live.currentKind === 'call' ? 'i-ph-phone' : 'i-ph-waveform'"
+        :label="hasMenu || showSections ? (live.currentTitle || 'Live') : undefined"
+        :aria-label="`Return to ${live.currentTitle || 'live conversation'}`"
+        color="success"
+        variant="soft"
+        class="mb-1 min-w-0"
+        :class="{ 'justify-center': !hasMenu && !showSections }"
+        :ui="{ label: 'truncate' }"
+        @click="ui.mobilePane = 'chat'; navigateTo(connectedPath)"
+      />
+      <LayoutUserPanel :compact="!hasMenu && !showSections" />
     </div>
     <SettingsAgentEditorModal v-if="can(Permission.manageAgents)" v-model:open="nav.createAgentOpen.value" :server-id="serverId" />
     <ProjectsCreateModal v-if="can(Permission.manageProjects)" v-model:open="nav.createProjectOpen.value" :server-id="serverId" />
