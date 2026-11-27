@@ -35,6 +35,8 @@ import { findAgentRun } from './agent-run-service'
 import { toolSecurityReason } from './agent-tool-security'
 import { executeRunTool } from './agent-tools'
 import { threadsSearchDescription, threadsSearchInput } from './agent-threads-search'
+import { instagramSearchCredentials, instagramSearchDescription, instagramSearchInput } from './agent-instagram-search'
+import { withIntegrations } from '../../workers/integrations'
 import { loadThreadsConnection } from './threads-connection'
 import { runIdOfCredential } from './mcp-run-credential'
 
@@ -71,6 +73,35 @@ const prioritySchema = z.enum(['low', 'normal', 'high', 'urgent'])
 const statusSchema = z.enum(['backlog', 'ready', 'review', 'done', 'failed'])
 const taskReferenceSchema = z.union([z.string().trim().min(1), z.number().int().positive()])
 
+type ResearchToolName = 'search_threads' | 'search_instagram'
+const researchTools: Record<ResearchToolName, { description: string; inputSchema: z.ZodType }> = {
+  search_threads: { description: threadsSearchDescription, inputSchema: threadsSearchInput },
+  search_instagram: { description: instagramSearchDescription, inputSchema: instagramSearchInput },
+}
+type RunResearch = { runId: string; available: ResearchToolName[]; signal: AbortSignal }
+
+async function runResearch({ env, principal }: McpServerContext, signal: AbortSignal): Promise<RunResearch | undefined> {
+  const runId = runIdOfCredential(principal.authorization.credential.id)
+  if (!runId) return
+  const permitted = (Object.keys(researchTools) as ResearchToolName[]).filter(name => {
+    try { authorizeToolCall(principal.authorization, name); return true }
+    catch { return false }
+  })
+  if (!permitted.length) return
+  const run = await findAgentRun(env, runId)
+  if (!run || run.status !== 'running' || run.deadline <= nowIso()) return
+  const mode = (JSON.parse(run.mandateJson) as RunMandate).execution?.mode
+  const published = permitted.filter(name => !toolSecurityReason(name, false, mode))
+  if (!published.length) return { runId, available: [], signal }
+
+  const [threads, effective] = await Promise.all([loadThreadsConnection(env), withIntegrations(env)])
+  const configured = {
+    search_threads: Boolean(threads && threads.expiresAt > Date.now()),
+    search_instagram: Boolean(instagramSearchCredentials(effective)),
+  }
+  return { runId, available: published.filter(name => configured[name]), signal }
+}
+
 /**
  * Serves one stateless MCP HTTP request. Only this Server's own hostname may appear in
  * Host and Origin, which keeps DNS-rebound and cross-site pages off the endpoint.
@@ -79,28 +110,11 @@ export async function serveMcpRequest(request: Request, context: McpServerContex
   const hostname = new URL(request.url).hostname
   const rejected = hostHeaderValidationResponse(request, [hostname]) ?? originValidationResponse(request, [hostname])
   if (rejected) return rejected
-  const { env, principal } = context
-  const runId = runIdOfCredential(principal.authorization.credential.id)
-  let threadsRunId: string | null = null
-  let threadsAvailable = false
-  if (runId) {
-    try {
-      authorizeToolCall(principal.authorization, 'search_threads')
-      threadsRunId = runId
-    } catch { /* Only the external Agent's authorized Run can use the Server's Threads connection. */ }
-    if (threadsRunId) {
-      const [run, connection] = await Promise.all([findAgentRun(env, threadsRunId), loadThreadsConnection(env)])
-      threadsAvailable = Boolean(run && run.status === 'running' && run.deadline > nowIso()
-        && connection && connection.expiresAt > Date.now()
-        && !toolSecurityReason('search_threads', false, (JSON.parse(run.mandateJson) as RunMandate).execution?.mode))
-    }
-  }
-  return createMcpHandler(() => createZugoidMcpServer(context, threadsRunId, threadsAvailable, request.signal)).fetch(request)
+  const research = await runResearch(context, request.signal)
+  return createMcpHandler(() => createZugoidMcpServer(context, research)).fetch(request)
 }
 
-export function createZugoidMcpServer(
-  { env, principal, schedule, origin = '' }: McpServerContext, threadsRunId: string | null = null, threadsAvailable = false, signal?: AbortSignal,
-): McpServer {
+export function createZugoidMcpServer({ env, principal, schedule, origin = '' }: McpServerContext, research?: RunResearch): McpServer {
   const server = new McpServer({ name: 'Zugoid', version: packageVersion }, { instructions: TASK_RECORDINGS_MCP_INSTRUCTIONS })
   const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(mcpOutput(value, origin), null, 2) }] })
   const dataResult = async (work: () => Promise<unknown>) => {
@@ -118,19 +132,20 @@ export function createZugoidMcpServer(
       return { ...result({ error: refused }), isError: true }
     }
     // Existing MCP tools can return Server data without going through the Run tool broker.
-    // Record that before invoking them so a subsequent search cannot send that data to Threads.
-    if (threadsRunId && name !== 'search_threads' && name !== 'complete_run') {
+    // Record that before invoking them so a subsequent search cannot send that data outside the Server.
+    if (research && !Object.hasOwn(researchTools, name) && name !== 'complete_run') {
       await env.DB.prepare('UPDATE agent_runs SET private_at=COALESCE(private_at,?) WHERE id=?')
-        .bind(nowIso(), threadsRunId).run()
+        .bind(nowIso(), research.runId).run()
     }
     return handler(...args)
   }) as never)) as unknown as McpServer['registerTool']
 
-  if (threadsRunId && threadsAvailable) tool('search_threads', {
-    description: threadsSearchDescription,
-    inputSchema: threadsSearchInput,
-    annotations: { readOnlyHint: true, openWorldHint: true },
-  }, async input => dataResult(() => executeRunTool(env, threadsRunId, { callId: newId(), name: 'search_threads', arguments: input }, schedule, signal)))
+  if (research) {
+    for (const name of research.available) {
+      tool(name, { ...researchTools[name], annotations: { readOnlyHint: true, openWorldHint: true } },
+        async input => dataResult(() => executeRunTool(env, research.runId, { callId: newId(), name, arguments: input }, schedule, research.signal)))
+    }
+  }
 
   if (!toolPaused('list_tables')) tool('list_tables', {
     description: 'Discover authorized table IDs, names, fields and views before reading records. Requires data:read.',

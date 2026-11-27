@@ -259,6 +259,71 @@ describe('Pi run authorization', () => {
     } finally { transport.mockRestore() }
   })
 
+  it('searches one Instagram hashtag from a Run on another model', async () => {
+    db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
+    await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')
+    const run = await createAgentRun(env, (await start())!, input())
+    expect(run.model).toBe('@cf/test')
+    db.prepare("UPDATE agent_runs SET status='running' WHERE id=?").run(run.id)
+    const token = await runCapability(env, run.id)
+    const call = (callId: string, name: string, args: unknown) => agentGateway(new Request('http://server/tools', {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ callId, name, arguments: args }),
+    }), env, run.id, 'tools', () => {})
+    const discover = async (id: string) => (await call(id, 'search_tools', { query: 'search_instagram' })).json()
+    const instagramTool = expect.objectContaining({ name: 'search_instagram', cost: 'network' })
+    expect((await discover('ig-disabled')).tools).not.toEqual(expect.arrayContaining([instagramTool]))
+
+    const accountId = '17841405309211844'
+    await updateIntegrations(env, { values: { INSTAGRAM_ACCOUNT_ID: accountId, INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic-instagram-token' } })
+    expect(await discover('ig-enabled')).toMatchObject({ tools: expect.arrayContaining([instagramTool]) })
+    const transport = vi.spyOn(globalThis, 'fetch').mockImplementation(async (request, init) => {
+      const url = new URL(String(request))
+      expect(url.origin).toBe('https://graph.facebook.com')
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer synthetic-instagram-token')
+      expect(init?.redirect).toBe('manual')
+      expect(init?.signal?.aborted).toBe(false)
+      if (url.pathname === '/v27.0/ig_hashtag_search') {
+        expect(Object.fromEntries(url.searchParams)).toEqual({ user_id: accountId, q: 'ViệtNam' })
+        return Response.json({ data: [{ id: '17873440459141021' }] })
+      }
+      expect(url.pathname).toBe('/v27.0/17873440459141021/recent_media')
+      expect(Object.fromEntries(url.searchParams)).toEqual({ user_id: accountId, fields: 'permalink,caption,media_type,timestamp', limit: '12' })
+      return Response.json({
+        data: [
+          { permalink: 'https://www.instagram.com/reel/ABC/?tracking=123', caption: 'A public post.', media_type: 'VIDEO', timestamp: 1767283200 },
+          { permalink: 'https://instagram.com/reel/ABC', caption: 'Duplicate' },
+          { permalink: 'https://www.instagram.com.example.net/reel/ABC/', caption: 'Foreign link' },
+          { permalink: 'https://www.instagram.com/example/', caption: 'Profile link' },
+        ],
+        paging: { next: 'https://graph.facebook.com/v27.0/17873440459141021/recent_media?access_token=synthetic-instagram-token' },
+      })
+    })
+    try {
+      const args = { hashtag: '#ViệtNam', sort: 'recent' }
+      expect((await call('ig-invalid', 'search_instagram', { hashtag: '#a #b' })).ok).toBe(false)
+      const response = await call('ig-recent', 'search_instagram', args)
+      expect(response.status).toBe(200)
+      const data = await response.json()
+      expect(data).toMatchObject({ hashtag: 'ViệtNam', sort: 'recent',
+        posts: [{ url: 'https://www.instagram.com/reel/ABC/', caption: 'A public post.', mediaType: 'VIDEO', timestamp: 1767283200 }],
+      })
+      expect(JSON.stringify(data)).not.toContain('synthetic-instagram-token')
+      expect((await findAgentRun(env, run.id))?.modelCalls).toBe(0)
+
+      transport.mockResolvedValueOnce(Response.json({ data: [] }))
+      expect(await (await call('ig-missing', 'search_instagram', { hashtag: 'missing' })).json()).toMatchObject({ posts: [], sort: 'top' })
+      transport.mockResolvedValueOnce(Response.json({ error: { code: 190, message: 'upstream diagnostics with secret' } }, { status: 400 }))
+      const expired = await call('ig-expired', 'search_instagram', args)
+      expect(expired.status).toBe(409)
+      expect(JSON.stringify(await expired.json())).not.toContain('upstream diagnostics')
+      db.prepare('UPDATE agent_runs SET private_at=? WHERE id=?').run(new Date().toISOString(), run.id)
+      expect((await call('ig-private', 'search_instagram', args)).status).toBe(403)
+      expect(transport).toHaveBeenCalledTimes(4)
+      await updateIntegrations(env, { values: { INSTAGRAM_USER_ACCESS_TOKEN: null } })
+      expect((await discover('ig-disconnected')).tools).not.toEqual(expect.arrayContaining([instagramTool]))
+    } finally { transport.mockRestore() }
+  })
+
   it('watches a bounded YouTube clip through Gemini from a Run using another model', async () => {
     db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id='agent-role'`)
     await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role","maxTokens":64000}')

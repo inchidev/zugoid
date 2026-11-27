@@ -8,6 +8,7 @@ import { resolveAiFunction } from './ai-functions'
 import { fail } from './cf'
 import { getServerId } from '../../shared/server-id'
 import { loadThreadsConnection, threadsCallbackUrl } from './threads-connection'
+import { instagramSearchCredentials } from './agent-instagram-search'
 
 export async function integrationsStatus(env: ZugoidEnv, actorId: string, origin: string): Promise<IntegrationsDTO> {
   // Fresh, not the 30-second cache: this screen shows the result of a save at once.
@@ -28,7 +29,7 @@ export async function integrationsStatus(env: ZugoidEnv, actorId: string, origin
   return { cloudflareNetwork: onCloudflare, fields,
     threads: { callbackUrl: threadsCallbackUrl(origin, serverId), expiresAt: threads ? new Date(threads.expiresAt).toISOString() : null,
       expired: Boolean(threads && threads.expiresAt <= Date.now()) },
-    status: { search: effective.EXA_API_KEY ? 'exa' : openrouter ? 'openrouter' : null, pages: browserProvider(effective), outbound: serverEmailProvider(effective), inbound: emailInboundProvider(effective), calls: callsProvider(effective) },
+    status: { search: effective.EXA_API_KEY ? 'exa' : openrouter ? 'openrouter' : null, instagram: Boolean(instagramSearchCredentials(effective)), pages: browserProvider(effective), outbound: serverEmailProvider(effective), inbound: emailInboundProvider(effective), calls: callsProvider(effective) },
     webhooks: { bridge: `${origin}/api/email/inbound`, postmark: `${origin}/api/email/inbound/postmark`, mailgun: `${origin}/api/email/inbound/mailgun`, ses: `${origin}/api/email/inbound/ses` } }
 }
 

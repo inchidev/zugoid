@@ -14,6 +14,7 @@ import { serveMcpRequest } from '../../server/utils/mcp-server'
 import type { McpPrincipal } from '../../server/utils/mcp-principal'
 import { Permission } from '../../shared/permissions'
 import { writeServerSetting } from '../../shared/server-settings'
+import { updateIntegrations } from '../../server/utils/integrations'
 import { beginThreadsConnection, completeThreadsConnection, disconnectThreads } from '../../server/utils/threads-connection'
 import type { ZugoidEnv } from '../../workers/env'
 
@@ -120,18 +121,19 @@ describe('an external Agent’s Run credential', () => {
     expect(data.value).toMatchObject({ error: { message: expect.stringContaining('The Assistant role cannot perform data:read') } })
   })
 
-  it('lets only the authorized Run search Threads through MCP and fences Server data from the search', async () => {
+  it('lets only the authorized Run search Threads and Instagram through MCP and fences Server data from searches', async () => {
     await external()
     db.exec(`UPDATE roles SET permissions_bitmask=permissions_bitmask|${Permission.browseWeb} WHERE id IN ('agent-role','writer-role')`)
     await writeServerSetting(env.DB, 'agents.executionPolicy', '{"mode":"role"}')
     const asVanya = (await authenticate((await wake(vanya)).token))!
     const asPetya = (await authenticate((await wake(petya)).token))!
     const standing = { ...asVanya, authorization: { ...asVanya.authorization, credential: { ...asVanya.authorization.credential, id: 'standing-token' } } }
-    const listsThreads = async (principal: McpPrincipal) => {
+    const listedSearchTools = async (principal: McpPrincipal) => {
       const { result } = await mcpRequest(principal, 'tools/list') as { result: { tools: Array<{ name: string }> } }
-      return result.tools.some(tool => tool.name === 'search_threads')
+      return result.tools.map(tool => tool.name).filter(name => ['search_threads', 'search_instagram'].includes(name)).sort()
     }
-    expect(await listsThreads(asVanya)).toBe(false)
+    expect(await listedSearchTools(asVanya)).toEqual([])
+    await updateIntegrations(env, { values: { INSTAGRAM_ACCOUNT_ID: '17841405309211844', INSTAGRAM_USER_ACCESS_TOKEN: 'synthetic-instagram-token' } })
     const owner = { serverId: SERVER, userId: 'owner-user' }
     const auth = new URL(await beginThreadsConnection(env, owner, 'https://team.example', { appId: '1234', appSecret: 'synthetic-app-secret' }))
     const callback = new URL(auth.searchParams.get('redirect_uri')!)
@@ -142,20 +144,31 @@ describe('an external Agent’s Run credential', () => {
       .mockResolvedValueOnce(Response.json({ access_token: 'synthetic-long-token', expires_in: 5184000 }))
     try {
       expect(await completeThreadsConnection(env, owner, callback)).toBe('connected')
-      expect(await listsThreads(asVanya)).toBe(true)
-      expect(await listsThreads(asPetya)).toBe(false)
-      expect(await listsThreads(standing)).toBe(false)
+      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram', 'search_threads'])
+      expect(await listedSearchTools(asPetya)).toEqual([])
+      expect(await listedSearchTools(standing)).toEqual([])
       transport.mockClear()
       transport.mockResolvedValueOnce(Response.json({ data: [{ permalink: 'https://www.threads.com/@zugoid/post/abc', text: 'Public launch' }] }))
       const search = await call(asVanya, 'search_threads', { query: 'public launch' })
       expect(search.isError, JSON.stringify(search.value)).toBe(false)
       expect(search.value).toMatchObject({ posts: [{ url: 'https://www.threads.com/@zugoid/post/abc', text: 'Public launch' }] })
+      transport.mockResolvedValueOnce(Response.json({ data: [{ id: '17873440459141021' }] }))
+        .mockImplementationOnce(async request => {
+          expect(new URL(String(request)).pathname).toBe('/v27.0/17873440459141021/top_media')
+          return Response.json({ data: [{ permalink: 'https://www.instagram.com/p/abc/', caption: 'Public launch' }] })
+        })
+      const instagram = await call(asVanya, 'search_instagram', { hashtag: 'zugoid' })
+      expect(instagram.isError, JSON.stringify(instagram.value)).toBe(false)
+      expect(instagram.value).toMatchObject({ posts: [{ url: 'https://www.instagram.com/p/abc/', caption: 'Public launch' }] })
       expect((await call(asVanya, 'list_task_boards', {})).isError).toBe(false)
       const blocked = await call(asVanya, 'search_threads', { query: 'private notes' })
       expect(blocked).toMatchObject({ isError: true, value: { error: { code: 'private_context_egress' } } })
-      expect(transport).toHaveBeenCalledTimes(1)
+      expect(await call(asVanya, 'search_instagram', { hashtag: 'privatenotes' })).toMatchObject({
+        isError: true, value: { error: { code: 'private_context_egress' } },
+      })
+      expect(transport).toHaveBeenCalledTimes(3)
       await disconnectThreads(env)
-      expect(await listsThreads(asVanya)).toBe(false)
+      expect(await listedSearchTools(asVanya)).toEqual(['search_instagram'])
     } finally { transport.mockRestore() }
   })
 
