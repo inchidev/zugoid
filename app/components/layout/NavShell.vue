@@ -286,20 +286,6 @@ watch(nav.inviteOpen, (open) => {
             </li>
           </ul>
         </nav>
-        <div class="hidden shrink-0 justify-center border-t border-default p-1 md:flex">
-          <UTooltip :text="compact ? 'Show section labels' : 'Hide section labels'" :content="{ side: 'right' }">
-            <UButton
-              icon="i-ph-text-aa"
-              color="neutral"
-              variant="ghost"
-              square
-              class="size-8 justify-center"
-              aria-label="Only show section icons"
-              :aria-pressed="compact"
-              @click="ui.sectionIconsOnly = !ui.sectionIconsOnly"
-            />
-          </UTooltip>
-        </div>
       </div>
 
       <div

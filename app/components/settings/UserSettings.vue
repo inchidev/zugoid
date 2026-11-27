@@ -13,6 +13,7 @@ const isOwner = computed(() => Boolean(server.value && server.value.ownerId === 
 const { api } = useApi()
 const live = useLiveStore()
 const prefs = usePrefsStore()
+const ui = useUiStore()
 const push = usePushNotifications()
 const presence = usePresenceStore()
 const toast = useToast()
@@ -99,7 +100,7 @@ const groups = computed(() => [
   {
     label: 'App Settings',
     items: [
-      { id: 'appearance', label: 'Appearance', icon: 'i-ph-paint-brush', keywords: ['theme', 'dark mode', 'light mode', 'compact'] },
+      { id: 'appearance', label: 'Appearance', icon: 'i-ph-paint-brush', keywords: ['theme', 'dark mode', 'light mode', 'compact', 'sidebar', 'navigation', 'icons', 'section labels'] },
       { id: 'notifications', label: 'Notifications', icon: 'i-ph-bell', keywords: ['push', 'sounds', 'alerts', 'mentions'] },
       { id: 'voice', label: 'Voice & Video', icon: 'i-ph-microphone', keywords: ['mic', 'live', 'call', 'audio', 'camera', 'devices'] },
       { id: 'chat', label: 'Chat', icon: 'i-ph-chat-circle-text', keywords: ['markdown', 'shortcuts', 'send message'] },
@@ -503,6 +504,14 @@ const showServers = import.meta.client ? window.__ZUGOID_NATIVE_SHOW_SERVERS__ :
       <p class="mt-1 text-sm text-muted">How Zugoid looks on this device.</p>
       <h2 class="mt-8 mb-3 text-xs font-bold uppercase tracking-wide text-muted">Theme</h2>
       <URadioGroup v-model="theme" variant="card" :items="themes" />
+      <h2 class="mt-8 mb-3 text-xs font-bold uppercase tracking-wide text-muted">Navigation</h2>
+      <div class="flex items-start justify-between gap-6 py-2">
+        <div>
+          <p class="font-medium text-highlighted">Icons-only sidebar</p>
+          <p class="text-sm text-muted mt-1">Hide section labels and use shorter rows in the desktop sidebar.</p>
+        </div>
+        <USwitch v-model="ui.sectionIconsOnly" aria-label="Icons-only sidebar" />
+      </div>
       <h2 class="mt-8 mb-3 text-xs font-bold uppercase tracking-wide text-muted">Message Display</h2>
       <div class="flex items-start justify-between gap-6 py-2">
         <div>
