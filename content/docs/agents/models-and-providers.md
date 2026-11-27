@@ -113,8 +113,8 @@ AI functions are small Server jobs that use a model directly, without an Agent. 
 | Help with Apps | Drafts Apps from Database Views. Apps are paused in this release. |
 | Thread titles | Names new Threads from their first message. Existing titles stay. |
 | Web search | Search for Agents. Choose a model that supports tool calls on an OpenRouter connection with **Web search** enabled. An Exa key under **Server settings → Integrations** takes precedence. |
-| Images | Draws pictures an Agent asks for while it works in a Task's box, such as the art of a game, and saves each as a file in its checkout. Needs an OpenRouter model that outputs images. Without one, Agents use the Avatars model, or else Nano Banana on the Server's OpenRouter connection. |
-| Avatars | Draws profile pictures for Members and Agents. Needs an OpenRouter model that outputs images, such as Nano Banana. |
+| Images | Draws pictures an Agent asks for while it works in a Task's box, such as the art of a game, and saves each as a file in its checkout. Choose a Nano Banana model on Google Gemini or an OpenRouter model that outputs images. Without an assignment, Agents use the Avatars model, or else Nano Banana on the Server’s OpenRouter connection. |
+| Avatars | Draws profile pictures for Members and Agents. Choose a Nano Banana model on Google Gemini or an OpenRouter model that outputs images. |
 | YouTube videos | Lets Agents with **Research the web** analyze public YouTube links. Choose a video-capable model on a direct Google Gemini connection. |
 | Image descriptions | Describes attached images for Agents whose model cannot see them. |
 | Voice transcription | Turns voice messages into text for Agents. |
@@ -122,6 +122,10 @@ AI functions are small Server jobs that use a model directly, without an Agent. 
 Each function lists only models that can do the job. Descriptions and transcripts reach the Agent marked as untrusted data. AI function calls are limited to 20 per Member per minute.
 
 Personal ChatGPT connections that are not shared serve only their owner's requests; other Members see them as unavailable.
+
+### Nano Banana on Gemini
+
+Open your **Google Gemini** connection in **Server settings → Models → Providers**. Add an available Nano Banana image model from its model list and save. Under **Models → Defaults → AI functions**, assign it to **Images**, **Avatars**, or both. The Server uses the Google AI Studio key on that connection. [Google’s Nano Banana model guide](https://aistudio.google.com/docs/image-generation)
 
 ### Generate avatars
 

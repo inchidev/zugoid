@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { AgentModelOption } from './agent-providers'
 
 // Settings lists these in this order: everyday jobs first, Help with Apps last.
 export const aiFunctions = [
@@ -7,8 +8,8 @@ export const aiFunctions = [
   { id: 'video.youtube', label: 'YouTube videos', description: 'Let agents watch public YouTube videos by link and cite timestamps. Choose a model on a direct Google Gemini connection.', maxOutputTokens: 2500 },
   { id: 'image.describe', label: 'Image descriptions', description: 'Describe attached images for agents whose model cannot see them.', maxOutputTokens: 600, requires: 'image-input' },
   { id: 'audio.transcribe', label: 'Voice transcription', description: 'Turn voice messages into text for agents.', maxOutputTokens: 2000, requires: 'audio-input' },
-  { id: 'image.generate', label: 'Images', description: 'Draw pictures agents ask for while they work, such as the art of a game. Needs an OpenRouter model that outputs images, such as Nano Banana. Without one, agents use the Avatars model, or else Nano Banana on the Server’s OpenRouter connection.', maxOutputTokens: 2000, requires: 'image-output' },
-  { id: 'avatar.generate', label: 'Avatars', description: 'Draw profile pictures for agents and members. Needs an OpenRouter model that outputs images, such as Nano Banana.', maxOutputTokens: 2000, requires: 'image-output' },
+  { id: 'image.generate', label: 'Images', description: 'Draw pictures agents ask for while they work, such as the art of a game. Choose a Nano Banana model on Google Gemini or an OpenRouter model that outputs images. Without an assignment, agents use the Avatars model, or else Nano Banana on the Server’s OpenRouter connection.', maxOutputTokens: 2000, requires: 'image-output' },
+  { id: 'avatar.generate', label: 'Avatars', description: 'Draw profile pictures for agents and members. Choose a Nano Banana model on Google Gemini or an OpenRouter model that outputs images.', maxOutputTokens: 2000, requires: 'image-output' },
   { id: 'apps.assist', label: 'Help with Apps', description: 'Compose a draft from the requesting Member’s available Database Views.', maxOutputTokens: 2000 },
 ] as const
 /** The capability a function's model must report in the provider catalog. */
@@ -19,8 +20,9 @@ export function modelMeetsRequirement(model: { inputs?: readonly string[]; outpu
   return Boolean(model.inputs?.includes(requires === 'image-input' ? 'image' : 'audio'))
 }
 export type AiFunctionId = typeof aiFunctions[number]['id']
-/** Functions that draw: they call OpenRouter's image output directly. */
+/** Functions that draw through a provider’s image output. */
 export const drawingAiFunctions: ReadonlySet<AiFunctionId> = new Set(['avatar.generate', 'image.generate'])
+export type AiFunctionModelOption = AgentModelOption & { webSearch: boolean; youtube: boolean; drawsImages: boolean; drawingOnly: boolean }
 /** The shapes an agent may ask a picture in. */
 export const imageAspectRatios = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'] as const
 export type ImageAspectRatio = typeof imageAspectRatios[number]

@@ -1,6 +1,6 @@
 import { streamText } from 'ai'
-import { aiFunctions, aiFunctionConfigSchema, drawingAiFunctions, modelMeetsRequirement, type AiFunctionId, type ImageAspectRatio, type AiFunctionConfig, type AiFunctionDTO } from '../../shared/ai-functions'
-import { agentModelRef, parseAgentModelRef, type AgentProviderModel } from '../../shared/agent-providers'
+import { aiFunctions, aiFunctionConfigSchema, drawingAiFunctions, modelMeetsRequirement, type AiFunctionId, type ImageAspectRatio, type AiFunctionConfig, type AiFunctionDTO, type AiFunctionModelOption } from '../../shared/ai-functions'
+import { agentModelRef, parseAgentModelRef, type AgentProviderId, type AgentProviderModel } from '../../shared/agent-providers'
 import { pausedAiFunctions } from '../../shared/features'
 import { readServerSetting } from '../../shared/server-settings'
 import { modelForRun } from '../../workers/ai-runtime'
@@ -12,6 +12,7 @@ import { readLimitedStream } from '../../workers/inbound-email-signature'
 import { asRpc, fail } from './cf'
 import { auditStatement, writeAudit } from './messages'
 import { inferenceFailure } from './agent-inference-errors'
+import { drawWithGemini, isGeminiImageModel } from './gemini-images'
 
 function youtubeModel(provider: Pick<StoredAgentProvider, 'kind'>, model: AgentProviderModel) {
   return provider.kind === 'google' && model.inputs?.includes('video') === true
@@ -29,13 +30,21 @@ function webSearchModel(provider: Pick<StoredAgentProvider, 'kind' | 'webSearch'
   return provider.kind === 'openrouter' && provider.webSearch === true && model.tools !== false
 }
 
+function functionCapabilities(provider: Pick<StoredAgentProvider, 'kind' | 'webSearch'>, model: AgentProviderModel) {
+  const drawingOnly = provider.kind === 'google' && isGeminiImageModel(model.id)
+  return {
+    drawingOnly,
+    drawsImages: (provider.kind === 'openrouter' || drawingOnly) && modelMeetsRequirement(model, 'image-output'),
+    webSearch: webSearchModel(provider, model),
+    youtube: !drawingOnly && youtubeModel(provider, model),
+  }
+}
+
 /** Function choices are independent of Agent profiles and the Server default. */
 export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
   const catalog = await agentProviderCatalog(env, { actorId, requireTools: false })
-  const webSearchModels = new Set(catalog.providers.flatMap(provider => provider.models
-    .filter(model => webSearchModel(provider, model)).map(model => agentModelRef(provider.id, model.id))))
-  const youtubeModels = new Set(catalog.providers.flatMap(provider => provider.models
-    .filter(model => youtubeModel(provider, model)).map(model => agentModelRef(provider.id, model.id))))
+  const capabilities = new Map(catalog.providers.flatMap(provider => provider.models
+    .map(model => [agentModelRef(provider.id, model.id), functionCapabilities(provider, model)] as const)))
   const functions: AiFunctionDTO[] = await Promise.all(aiFunctions.filter(definition => !pausedAiFunctions.has(definition.id)).map(async definition => {
     let config: AiFunctionConfig
     try { config = await aiFunctionConfig(env, definition.id) }
@@ -44,13 +53,17 @@ export async function aiFunctionCatalog(env: ZugoidEnv, actorId: string) {
     const provider = selected && catalog.providers.find(provider => provider.id === selected.provider)
     const chosen = provider?.models.find(model => model.id === selected!.model)
     const requires = 'requires' in definition ? definition.requires : undefined
-    const available = Boolean(provider?.configured && provider.enabled && chosen && modelMeetsRequirement(chosen, requires)
-      && (definition.id !== 'web.search' || webSearchModel(provider, chosen))
-      && (definition.id !== 'video.youtube' || youtubeModel(provider, chosen))
-      && (!drawingAiFunctions.has(definition.id) || provider.kind === 'openrouter'))
+    const supported = config.model ? capabilities.get(config.model) : undefined
+    const available = Boolean(provider?.configured && provider.enabled && chosen && supported && modelMeetsRequirement(chosen, requires)
+      && (definition.id !== 'web.search' || supported.webSearch)
+      && (definition.id !== 'video.youtube' || supported.youtube)
+      && (drawingAiFunctions.has(definition.id) ? supported.drawsImages : !supported.drawingOnly))
     return { ...definition, ...config, available, ...(chosen && provider ? { modelLabel: `${provider.name} / ${chosen.label || chosen.id}` } : {}) }
   }))
-  return { functions, models: catalog.models.map(model => ({ ...model, webSearch: webSearchModels.has(model.value), youtube: youtubeModels.has(model.value) })) }
+  const models: AiFunctionModelOption[] = catalog.models.map(model => ({
+    ...model, ...(capabilities.get(model.value) ?? { webSearch: false, youtube: false, drawsImages: false, drawingOnly: false }),
+  }))
+  return { functions, models }
 }
 
 export async function saveAiFunction(env: ZugoidEnv, authorization: AuthorizationContext, id: AiFunctionId, config: AiFunctionConfig) {
@@ -62,7 +75,8 @@ export async function saveAiFunction(env: ZugoidEnv, authorization: Authorizatio
     if (!option) fail(400, 'model_unavailable', 'Choose an available model')
     const definition = aiFunctions.find(item => item.id === id)!
     if ('requires' in definition && !modelMeetsRequirement(option, definition.requires)) fail(400, 'model_capability', `${definition.label} needs a model that ${definition.requires === 'image-output' ? 'outputs images' : definition.requires === 'image-input' ? 'reads images' : 'reads audio'}. Load the provider's models again if it should.`)
-    if (drawingAiFunctions.has(id) && (await agentProviderCatalog(env, { actorId: authorization.principal.id, requireTools: false })).providers.find(provider => provider.id === parseAgentModelRef(option.value)?.provider)?.kind !== 'openrouter') fail(400, 'model_capability', `${definition.label} currently draw with an OpenRouter image model`)
+    if (drawingAiFunctions.has(id) && !option.drawsImages) fail(400, 'model_capability', `${definition.label} needs a Gemini or OpenRouter image model`)
+    if (option.drawingOnly && !drawingAiFunctions.has(id)) fail(400, 'model_capability', 'This Gemini model is available for Images and Avatars')
     if (id === 'video.youtube' && !option.youtube) fail(400, 'model_capability', 'Choose a video model on a direct Google Gemini connection')
     if (id === 'web.search' && !option.webSearch) fail(400, 'search_unavailable', 'Choose a model that supports tool calls on an OpenRouter connection with Web search enabled')
   }
@@ -83,8 +97,13 @@ export async function resolveAiFunction(env: ZugoidEnv, id: AiFunctionId, actorI
   if (!provider?.enabled || !provider.secret || !model || (provider.kind === 'chatgpt' && !chatGPTUsableBy(provider, actorId))) {
     fail(409, 'ai_function_unavailable', `${definition.label} uses an unavailable connection or model. Update its assignment in Providers.`)
   }
-  if (id === 'video.youtube' && !youtubeModel(provider, model)) fail(409, 'ai_function_unavailable', 'Choose a video model on a direct Google Gemini connection in Models → Defaults')
-  if (id === 'web.search' && !webSearchModel(provider, model)) {
+  const supported = functionCapabilities(provider, model)
+  if (drawingAiFunctions.has(id) && provider.kind !== 'openrouter' && !supported.drawsImages) {
+    fail(409, 'ai_function_unavailable', 'Choose a Gemini or OpenRouter image model in Models → Defaults')
+  }
+  if (supported.drawingOnly && !drawingAiFunctions.has(id)) fail(409, 'ai_function_unavailable', 'This Gemini model is available for Images and Avatars')
+  if (id === 'video.youtube' && !supported.youtube) fail(409, 'ai_function_unavailable', 'Choose a video model on a direct Google Gemini connection in Models → Defaults')
+  if (id === 'web.search' && !supported.webSearch) {
     fail(409, 'ai_function_unavailable', 'Web search needs an OpenRouter model that supports tool calls on a connection with Web search enabled. Update its assignment in Models → Defaults.')
   }
   return config.model
@@ -142,7 +161,7 @@ async function zugoidLogo(env: ZugoidEnv) {
   } catch { return null }
 }
 /**
- * Draw one avatar with the Avatars function's OpenRouter image model, from a
+ * Draw one avatar with the Avatars function's image model, from a
  * prompt and up to three reference pictures, optionally in the Zugoid style. The
  * picture comes back for preview; saving it uses the ordinary avatar upload.
  */
@@ -153,7 +172,7 @@ export async function generateAvatar(env: ZugoidEnv, authorization: Authorizatio
   const limiter = asRpc<{ take: (limit: number, windowMs: number) => Promise<boolean> }>(env.RATE_LIMIT_DO.getByName(`ai-function:${authorization.principal.id}`))
   if (!await limiter.take(20, 60_000)) fail(429, 'rate_limited', 'Too many AI requests. Try again in a minute.')
   const saved = await resolveSavedAgentModel(env, reference, authorization.principal.id)
-  if (!saved || saved.id !== 'openrouter') fail(409, 'ai_function_unavailable', 'Avatars need an OpenRouter image model. Choose one in Models → Defaults.')
+  if (!saved) fail(409, 'ai_function_unavailable', 'Choose an image model for Avatars in Models → Defaults')
   const logo = input.zugoidStyle ? await zugoidLogo(env) : null
   const request = [
     avatarBrief,
@@ -165,7 +184,8 @@ export async function generateAvatar(env: ZugoidEnv, authorization: Authorizatio
   const images = [...(logo ? [logo] : []), ...references]
   let status = 'failed'
   try {
-    const image = await drawWithOpenRouter(saved.apiKey, saved.model.id, request, images, {}, transport)
+    const image = await drawWithProvider({ id: saved.id, apiKey: saved.apiKey, model: saved.model.id }, request, images,
+      saved.id === 'google' ? { aspectRatio: '1:1' } : {}, transport)
     // Only a picture no larger than an avatar upload is passed on.
     if (image.length > 2_800_000) fail(502, 'ai_function_failed', 'The image model returned no usable picture. Try again or choose another model.')
     status = 'completed'
@@ -192,6 +212,13 @@ async function drawWithOpenRouter(apiKey: string, model: string, request: string
   return image
 }
 
+type DrawingConnection = { id: AgentProviderId; apiKey: string; model: string }
+function drawWithProvider(saved: DrawingConnection, request: string, images: string[], options: { aspectRatio?: ImageAspectRatio }, transport: typeof fetch) {
+  if (saved.id === 'openrouter') return drawWithOpenRouter(saved.apiKey, saved.model, request, images, options, transport)
+  if (saved.id === 'google' && isGeminiImageModel(saved.model)) return drawWithGemini(saved.apiKey, saved.model, request, images, options, transport)
+  fail(409, 'ai_function_unavailable', 'Choose a Gemini or OpenRouter image model in Models → Defaults')
+}
+
 /** The largest picture an agent receives: a full-screen PNG fits, a raw camera frame does not. */
 export const AGENT_IMAGE_MAX_BYTES = 8_000_000
 const imageBrief = [
@@ -201,10 +228,6 @@ const imageBrief = [
   'Never depict a real, identifiable person or another work\'s characters or logos.',
 ].join(' ')
 
-/**
- * Draw one picture an agent asked for, with the Images function's OpenRouter model, or the Avatars model when
- * Images has none. The picture is paid for by the Server's own provider key, like the agent's model.
- */
 /** What draws when neither Images nor Avatars has a model: Nano Banana on the Server's OpenRouter connection. */
 export const DEFAULT_IMAGE_MODEL = 'google/gemini-2.5-flash-image'
 /** The first enabled OpenRouter connection with a key, by name, for the default image model. */
@@ -218,32 +241,32 @@ async function openRouterConnection(env: ZugoidEnv): Promise<{ apiKey: string; c
 }
 
 /**
- * Draw one picture an agent asked for, with the Images function's OpenRouter model, or the Avatars model when
+ * Draw one picture an agent asked for, with the Images function's model, or the Avatars model when
  * Images has none, or else Nano Banana on the Server's OpenRouter connection. The picture is paid for by the
  * Server's own provider key, like the agent's model.
  */
 export async function generateImage(env: ZugoidEnv, authorization: AuthorizationContext, input: { prompt: string; aspectRatio?: ImageAspectRatio }, transport: typeof fetch = fetch): Promise<{ mediaType: string; bytes: Uint8Array }> {
   const chosen = (await aiFunctionConfig(env, 'image.generate')).model ? 'image.generate' : (await aiFunctionConfig(env, 'avatar.generate')).model ? 'avatar.generate' : null
   const id = chosen ?? 'image.generate'
-  let saved: { apiKey: string; model: string }
+  let saved: DrawingConnection
   let reference: string
   if (chosen) {
     try { reference = await resolveAiFunction(env, chosen, authorization.principal.id) }
-    catch { fail(409, 'ai_function_unavailable', 'The image model is unavailable. Ask the Owner to choose an OpenRouter model that outputs images for Images in Models → Defaults.') }
+    catch { fail(409, 'ai_function_unavailable', 'The image model is unavailable. Ask the Owner to choose an image model for Images in Models → Defaults.') }
     const model = await resolveSavedAgentModel(env, reference, authorization.principal.id)
-    if (!model || model.id !== 'openrouter') fail(409, 'ai_function_unavailable', 'Images need an OpenRouter image model. Choose one in Models → Defaults.')
-    saved = { apiKey: model.apiKey, model: model.model.id }
+    if (!model) fail(409, 'ai_function_unavailable', 'Choose an image model for Images in Models → Defaults')
+    saved = { id: model.id, apiKey: model.apiKey, model: model.model.id }
   } else {
     const connection = await openRouterConnection(env)
-    if (!connection) fail(409, 'ai_function_unconfigured', 'No image model is set. Ask the Owner to connect OpenRouter, or to choose a model for Images in Models → Defaults.')
-    saved = { apiKey: connection.apiKey, model: DEFAULT_IMAGE_MODEL }
+    if (!connection) fail(409, 'ai_function_unconfigured', 'No image model is set. Ask the Owner to choose a model for Images in Models → Defaults.')
+    saved = { id: 'openrouter', apiKey: connection.apiKey, model: DEFAULT_IMAGE_MODEL }
     reference = agentModelRef(connection.connectionId, DEFAULT_IMAGE_MODEL)
   }
   const limiter = asRpc<{ take: (limit: number, windowMs: number) => Promise<boolean> }>(env.RATE_LIMIT_DO.getByName(`ai-image:${authorization.principal.id}`))
   if (!await limiter.take(30, 60_000)) fail(429, 'rate_limited', 'Too many pictures at once. Wait a minute and try again.')
   let status = 'failed'
   try {
-    const url = await drawWithOpenRouter(saved.apiKey, saved.model, `${imageBrief}\n\nRequest: ${input.prompt.slice(0, 4000)}`, [], { aspectRatio: input.aspectRatio }, transport)
+    const url = await drawWithProvider(saved, `${imageBrief}\n\nRequest: ${input.prompt.slice(0, 4000)}`, [], { aspectRatio: input.aspectRatio }, transport)
     const [, mediaType, data] = /^data:(image\/[a-z]+);base64,(.*)$/u.exec(url)!
     const binary = atob(data!)
     if (binary.length > AGENT_IMAGE_MAX_BYTES) fail(502, 'ai_function_failed', 'The picture is too large. Ask for a smaller one.')

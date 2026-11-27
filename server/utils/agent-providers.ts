@@ -4,6 +4,7 @@ import { readServerSetting, writeServerSetting } from '../../shared/server-setti
 import { aiProvider, resolveAgentModelId, type ZugoidEnv } from '../../workers/env'
 import type { z } from 'zod'
 import { fail } from './cf'
+import { geminiDrawingCapabilities, isGeminiImageModel } from './gemini-images'
 import { allowedWorkersAiModels, deploymentProviderSetting } from './agent-deployment-provider'
 
 export type ChatGPTCredentials = { accessToken: string; refreshToken: string; idToken: string; expiresAt: number; clientId: string; subject: string; email: string; scope: string }
@@ -98,7 +99,9 @@ export async function saveAgentProvider(env: ZugoidEnv, id: string, input: z.inf
   if (secret && !input.models.length) fail(400, 'model_required', 'Choose at least one model')
   if (new Set(input.models.map(m => m.id)).size !== input.models.length) fail(400, 'duplicate_model', 'Models must be unique')
   if (input.models.some(model => model.api !== providerModelApi[kind])) fail(400, 'invalid_api', 'The model protocol does not match this provider')
-  await writeServerSetting(env.DB, agentProviderKey(id), JSON.stringify({ ...current, kind, name: input.name || (input.name === undefined && current?.name) || providerNames[kind], enabled: input.enabled, webSearch: input.webSearch && kind === 'openrouter', shared: kind === 'chatgpt' ? input.shared ?? current?.shared ?? false : undefined, models: input.models, secret, keyPreview: input.apiKey ? maskedAgentKey(input.apiKey) : current?.keyPreview }))
+  const models = kind === 'google' ? input.models.map(model => isGeminiImageModel(model.id)
+    ? { ...model, ...geminiDrawingCapabilities } : model) : input.models
+  await writeServerSetting(env.DB, agentProviderKey(id), JSON.stringify({ ...current, kind, name: input.name || (input.name === undefined && current?.name) || providerNames[kind], enabled: input.enabled, webSearch: input.webSearch && kind === 'openrouter', shared: kind === 'chatgpt' ? input.shared ?? current?.shared ?? false : undefined, models, secret, keyPreview: input.apiKey ? maskedAgentKey(input.apiKey) : current?.keyPreview }))
 }
 export async function resolveSavedAgentModel(env: ZugoidEnv, reference: string, actorId?: string) {
   const parsed = parseAgentModelRef(reference)
