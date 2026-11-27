@@ -44,8 +44,8 @@ beforeEach(() => {
 })
 afterEach(() => { view?.unmount(); view = undefined; client.clear(); vi.unstubAllGlobals() })
 
-function open() {
-  view = mount(MessageList, { props: { channelId: 'thread', members: [], showIntro: false, allowThreads: false }, global: {
+function open(readOnOpen = false) {
+  view = mount(MessageList, { props: { channelId: 'thread', members: [], showIntro: false, allowThreads: false, readOnOpen }, global: {
     plugins: [[VueQueryPlugin, { queryClient: client }]],
     stubs: {
       UContextMenu: { template: '<div><slot /></div>' }, UModal: true, UDrawer: true, LayoutSkeleton: true, LayoutLoadError: true,
@@ -73,17 +73,44 @@ it('shows the original immediately for a freshly created, cached thread without 
 
 describe('reads', () => {
   let generation = 0
-  const api = vi.fn(async (url: string) => url.endsWith('/attention')
-    ? { following: false, notifications: 'default', readGeneration: generation }
-    : { messages: [message('m1', url.split('/')[3]!, 'One')], rootMessage: null, nextCursor: null, lastReadMessageId: null })
+  let attentionReady: Promise<void> | undefined
+  const api = vi.fn(async (url: string) => {
+    if (url.endsWith('/attention')) {
+      await attentionReady
+      return { following: false, notifications: 'default', readGeneration: generation }
+    }
+    return { messages: [message('m1', url.split('/')[3]!, 'One')], rootMessage: null, nextCursor: null, lastReadMessageId: null }
+  })
   const settle = async () => { await flushPromises(); await nextTick(); await flushPromises() }
   beforeEach(() => {
     generation = 0
+    attentionReady = undefined
     api.mockClear()
     vi.stubGlobal('useApi', () => ({ api }))
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   })
   const reads = (list: VueWrapper) => (list.emitted('read') ?? []) as Array<[string, number]>
+
+  it('marks an opened email read before the reader scrolls, without clearing newer messages off screen', async () => {
+    const attention = Promise.withResolvers<void>()
+    attentionReady = attention.promise
+    const list = open(true)
+    const scroller = list.get('[role="log"]').element as HTMLElement
+    Object.defineProperties(scroller, {
+      scrollHeight: { get: () => 2000 },
+      scrollTop: { get: () => 0, set: () => {} },
+      clientHeight: { get: () => 400 },
+    })
+    await settle()
+    expect(reads(list)).toEqual([])
+    attention.resolve()
+    await settle()
+    expect(reads(list)).toEqual([['m1', 0]])
+
+    client.setQueryData(['messages', 'thread'], { pages: [{ messages: [message('m1', 'thread', 'One'), message('m2', 'thread', 'Two')], rootMessage: null, nextCursor: null }], pageParams: [undefined] })
+    await settle()
+    expect(reads(list)).toEqual([['m1', 0]])
+  })
 
   it('asks afresh on returning to a conversation inside staleTime, so reads do not stall', async () => {
     const list = open()
