@@ -3,7 +3,8 @@ import { buildInput, pipelineTargets, type ProjectBuild, type PipelineTarget } f
 import { gadgetPath } from '../../shared/paths'
 import { newId, nowIso } from '../../shared/ids'
 import type { ZugoidEnv } from '../../workers/env'
-import { artifactsGrant, artifactsHead } from './factory-artifacts'
+import { artifactsGrant } from './factory-artifacts'
+import { advertisedRefs } from './git-pack'
 import { BUILD_LIFETIME, BUILD_LIMIT, buildLog, checkout, launchBuild, readSandboxFile, startSandbox, stopSandbox } from './factory-lizard'
 import { getGadgetDetail, publishGadget } from './gadget-catalog'
 import { gadgetSpecSchema } from './gadget-spec'
@@ -50,7 +51,11 @@ export async function createBuild(env: ZugoidEnv, actor: Membership, project: st
   const input = buildInput.parse(body)
   const repo = (await listProjectRepositories(env, actor.authorization, project)).find(r => r.id === input.repoId && r.provider === 'artifacts')
   if (!repo) fail(404, 'build_repo_missing', 'Select an Artifacts repository attached to this project')
-  const commit = await artifactsHead(env, repo.slug, input.ref)
+  const grant = await artifactsGrant(env, repo.slug, 'read')
+  let refs
+  try { refs = await advertisedRefs(grant.remote, grant.token, 'git-upload-pack', fetch, true) }
+  finally { await grant.revoke() }
+  const commit = refs.get(input.ref + '^{}') ?? refs.get(input.ref)
   if (!commit) fail(404, 'build_ref_missing', 'Git ref not found')
   const id = await enqueueBuild(env, project, repo.id, input.ref, commit)
   if (!id) fail(409, 'build_config_missing', 'Build is unavailable for this project')

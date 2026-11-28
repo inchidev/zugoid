@@ -284,7 +284,7 @@ describe('Gadgets', () => {
       FACTORY_LIZARD_KEY: 'fixture-runner-key', FACTORY_LIZARD_PROJECT: 'fixture-project',
       SERVER_DO: { getByName: () => ({ runFactoryBuilds: alarm }) },
       FACTORY_CODE: { get: async () => ({
-        log: async () => [{ hash: commit }], info: async () => ({ remote: 'https://git.fixture.test/source' }),
+        info: async () => ({ remote: 'https://git.fixture.test/source' }),
         createToken: async () => ({ id: 'read', plaintext: 'fixture-artifacts-token' }),
         revokeToken: revoke, [Symbol.dispose]: () => {},
       }) },
@@ -292,6 +292,11 @@ describe('Gadgets', () => {
     const artifact = { spec, name: 'Checked App' }
     const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input))
+      if (url.pathname.endsWith('/info/refs')) {
+        const tag = 'b'.repeat(40)
+        const line = (value: string) => (value.length + 4).toString(16).padStart(4, '0') + value
+        return new Response(line(tag + ' refs/tags/v1.0.0\n') + line(commit + ' refs/tags/v1.0.0^{}\n') + '0000')
+      }
       if (url.pathname.endsWith('/api/sandboxes')) return Response.json({ sandboxId: 'build-fixture' })
       if (url.pathname.endsWith('/exec')) return Response.json({ exitCode: 0, stdout: 'checks passed' })
       if (url.pathname.endsWith('/files')) return new Response(url.searchParams.get('path') === '/tmp/factory-exit' ? '0' : JSON.stringify(artifact))
