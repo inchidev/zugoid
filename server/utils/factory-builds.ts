@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { buildInput, pipelineTargets, type ProjectBuild, type PipelineTarget } from '../../shared/factory-builds'
-import { gadgetPath } from '../../shared/paths'
+import { appPath } from '../../shared/paths'
 import { newId, nowIso } from '../../shared/ids'
 import type { ZugoidEnv } from '../../workers/env'
 import { artifactsGrant } from './factory-artifacts'
@@ -229,7 +229,7 @@ export async function stageBuild(env: ZugoidEnv, actor: Membership, project: str
     const payload = appOutput.parse(envelope.output)
     const preview = await previewGadgetBuild(env, actor, target.app, payload)
     revision = preview.gadget.version
-    url = gadgetPath(target.app) + '&' + new URLSearchParams({ preview: '1', factory: project, build: id })
+    url = appPath(target.app) + '&' + new URLSearchParams({ preview: '1', factory: project, build: id })
   }
   await env.DB.prepare('UPDATE project_builds SET preview_url=?,app_revision=? WHERE id=? AND preview_url IS NULL')
     .bind(url, revision, id).run()

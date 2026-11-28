@@ -309,7 +309,7 @@ watch(nav.inviteOpen, (open) => {
           <LayoutTasksNav v-else-if="section === 'tasks' && showsTasks" :server-id="serverId" />
           <LayoutFactoryNav v-else-if="section === 'factory' && showsFactory" :server-id="serverId" />
           <LayoutDatabasesNav v-else-if="section === 'data' && can(Permission.readData)" :server-id="serverId" />
-          <LayoutGadgetsNav v-else-if="section === 'gadgets' && (can(Permission.useGadgets) || can(Permission.manageGadgets))" :server-id="serverId" />
+          <LayoutGadgetsNav v-else-if="section === 'apps' && (can(Permission.useGadgets) || can(Permission.manageGadgets))" :server-id="serverId" />
           <LayoutCustomersNav v-else-if="section === 'customers'" />
           <LayoutMediaNav v-else-if="section === 'media'" />
         </div>

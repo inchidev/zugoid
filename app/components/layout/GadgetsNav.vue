@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useQuery } from '@tanstack/vue-query'
 import type { GadgetListDTO } from '~~/shared/gadgets'
-import { gadgetPath } from '~~/shared/paths'
+import { appPath } from '~~/shared/paths'
 
 const props = defineProps<{ serverId: string }>()
 const route = useRoute()
@@ -14,7 +14,7 @@ const gadgetsQ = useQuery({
   enabled: computed(() => Boolean(props.serverId)),
 })
 const gadgets = computed(() => gadgetsQ.data.value?.gadgets ?? [])
-const activeId = computed(() => String(route.query.gadget || '') || gadgets.value[0]?.id || '')
+const activeId = computed(() => String(route.query.app || '') || gadgets.value[0]?.id || '')
 </script>
 
 <template>
@@ -29,7 +29,7 @@ const activeId = computed(() => String(route.query.gadget || '') || gadgets.valu
     <p v-else-if="!gadgets.length" class="px-2 py-2 text-sm text-muted">No apps yet.</p>
     <ul v-else>
       <li v-for="gadget in gadgets" :key="gadget.id">
-        <LayoutNavRow :to="gadgetPath(gadget.id)" :title="gadget.name" :active="gadget.id === activeId">
+        <LayoutNavRow :to="appPath(gadget.id)" :title="gadget.name" :active="gadget.id === activeId">
           <template #leading><UIcon name="i-ph-app-window" class="size-[18px] shrink-0 text-dimmed" /></template>
           {{ gadget.name }}
           <template #trailing>

@@ -1,6 +1,6 @@
 import { channelPath, type ChannelRef } from './paths'
 
-export type ServerNavigationSection = 'chat' | 'inbox' | 'schedules' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'gadgets'
+export type ServerNavigationSection = 'chat' | 'inbox' | 'schedules' | 'tasks' | 'factory' | 'customers' | 'agents' | 'data' | 'media' | 'apps'
 
 export function isMobilePrimarySection(path: string): boolean {
   const section = serverNavigationSection(path)
@@ -27,7 +27,8 @@ export function serverNavigationSection(path: string): ServerNavigationSection |
   if (['data', 'databases', 'items'].includes(segment || '')) return 'data'
   // Mailboxes are a view of Customers.
   if (segment === 'customers' || segment === 'mail') return 'customers'
-  if (segment === 'inbox' || segment === 'schedules' || segment === 'agents' || segment === 'media' || segment === 'gadgets') return segment
+  if (segment === 'apps' || segment === 'gadgets') return 'apps'
+  if (segment === 'inbox' || segment === 'schedules' || segment === 'agents' || segment === 'media') return segment
   return null
 }
 
@@ -47,7 +48,7 @@ const API_MODULE_SEGMENTS: Record<string, ServerNavigationSection> = {
   agents: 'agents', 'agent-runs': 'agents', 'agent-auth': 'agents',
   media: 'media',
   databases: 'data', 'database-fields': 'data', 'database-views': 'data', items: 'data',
-  gadgets: 'gadgets',
+  gadgets: 'apps',
 }
 
 /** The section an `/api/...` path belongs to, or null for the Server's own paths, which stay. */

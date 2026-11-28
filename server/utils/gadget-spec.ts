@@ -36,7 +36,7 @@ function unique(values: string[]): boolean {
 
 export function parseGadgetSpec(value: unknown): GadgetSpec {
   const parsed = gadgetSpecSchema.safeParse(value)
-  if (!parsed.success) fail(400, 'invalid_gadget_spec', parsed.error.issues[0]?.message ?? 'Invalid Gadget spec')
+  if (!parsed.success) fail(400, 'invalid_gadget_spec', parsed.error.issues[0]?.message ?? 'Invalid App specification')
   const spec = parsed.data
   if (!unique(spec.bindings.map(binding => binding.id)) || !unique(spec.sections.map(section => section.id))) {
     fail(400, 'invalid_gadget_spec', 'App Binding and Section ids must be unique')

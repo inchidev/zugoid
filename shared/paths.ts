@@ -86,10 +86,10 @@ export function canvasPath(canvasId?: string | null): string {
   return canvasId ? `/items/${encodeURIComponent(canvasId)}` : '/data'
 }
 
-export function gadgetPath(gadgetId?: string | null, edit = false): string {
+export function appPath(appId?: string | null, edit = false): string {
   const query = new URLSearchParams()
-  if (gadgetId) query.set('gadget', gadgetId)
+  if (appId) query.set('app', appId)
   if (edit) query.set('edit', '1')
   const suffix = query.toString()
-  return suffix ? `/gadgets?${suffix}` : '/gadgets'
+  return suffix ? `/apps?${suffix}` : '/apps'
 }
