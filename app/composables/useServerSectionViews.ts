@@ -73,7 +73,7 @@ export function useServerSectionViews(serverId: MaybeRefOrGetter<string>) {
     ...(can(Permission.useAgents) || can(Permission.manageAgents) ? [{ label: 'Agents', icon: 'i-ph-robot', to: '/agents', path: '/agents', count: 0, dot: false }] : []),
     ...(can(Permission.readData) ? [{ label: 'Data', icon: 'i-ph-stack', to: '/data', path: '/data', count: 0, dot: false }] : []),
     { label: 'Media', icon: 'i-ph-images', to: '/media', path: '/media', count: 0, dot: false },
-    ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/gadgets', path: '/gadgets', count: 0, dot: false }] : []),
+    ...(can(Permission.useGadgets) || can(Permission.manageGadgets) ? [{ label: 'Apps', icon: 'i-ph-squares-four', to: '/apps', path: '/apps', count: 0, dot: false }] : []),
   ].filter((view) => {
     const section = serverNavigationSection(view.path)!
     return !pausedSections.has(section) && !hiddenSections.value.has(section)

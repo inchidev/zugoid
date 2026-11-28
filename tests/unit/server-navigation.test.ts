@@ -26,7 +26,7 @@ describe('Server rail destinations', () => {
   })
 
   it('opens context menus and keeps boards in Tasks, and Projects and Runs in Factory', () => {
-    for (const section of ['tasks', 'factory', 'customers', 'inbox', 'agents', 'media', 'gadgets']) {
+    for (const section of ['tasks', 'factory', 'customers', 'inbox', 'agents', 'media', 'apps']) {
       expect(serverNavigationSection(`/${section}`)).toBe(section)
       expect(hasServerNavigationMenu(`/${section}`)).toBe(true)
     }
@@ -45,6 +45,8 @@ describe('Server rail destinations', () => {
   it('keeps the earlier addresses in their sections while they redirect', () => {
     expect(serverNavigationSection('/tasks')).toBe('tasks')
     for (const path of ['/factory', '/factory/projects/project-id']) expect(serverNavigationSection(path)).toBe('factory')
+    expect(serverNavigationSection('/gadgets')).toBe('apps')
+    expect(apiModuleSection('/api/gadgets/app-id')).toBe('apps')
   })
 
   it('opens Scheduled directly and assigns its page and API to its own module', () => {
