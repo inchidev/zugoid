@@ -1326,6 +1326,24 @@ export const projectReleases = sqliteTable('project_releases', {
   createdBy: text('created_by').notNull().references(() => users.id), createdAt: text('created_at').notNull(),
 }, table => [unique().on(table.projectId, table.tag), index('project_releases_project').on(table.projectId)])
 
+export const projectBuilds = sqliteTable('project_builds', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  repositoryId: text('repository_id').notNull().references(() => projectRepositories.id, { onDelete: 'cascade' }),
+  ref: text('ref').notNull(),
+  sha: text('sha').notNull(),
+  state: text('state').notNull(),
+  destination: text('destination').notNull(),
+  sandbox: text('sandbox'),
+  log: text('log').notNull().default(''),
+  digest: text('digest'),
+  previewUrl: text('preview_url'),
+  appRevision: integer('app_revision'),
+  publishedVersion: integer('published_version'),
+  startedAt: text('started_at'),
+  createdAt: text('created_at').notNull(),
+}, table => [index('project_builds_project').on(table.projectId, table.createdAt)])
+
 export const projectPolicies = sqliteTable('project_policies', {
   id: text('id').primaryKey(), name: text('name').notNull().unique(), description: text('description').notNull().default(''),
   permissionsBitmask: integer('permissions_bitmask').notNull(), version: integer('version').notNull().default(1),

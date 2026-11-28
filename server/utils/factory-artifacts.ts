@@ -18,6 +18,7 @@ import { addProjectRepository, requireProject } from './project-service'
 import { enabledCompute, requireConnectAuthority } from './repository-connect'
 import { spaceOfResource } from './space-access'
 import { parseBody } from './validate'
+import { afterArtifactChange } from './factory-builds'
 
 /**
  * Artifacts as a Git provider: one repository per Project inside the Server's own namespace, the one
@@ -291,6 +292,7 @@ export async function createProjectRelease(env: ZugoidEnv, auth: AuthorizationCo
   await env.DB.prepare('INSERT INTO project_releases(id,project_id,repository_id,repository,tag,version,sha,message,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
     .bind(id, projectId, repository.id, repository.name, tagName, version, head, message, auth.principal.id, now).run()
   await writeAudit(env, { serverId: auth.serverId, actorId: auth.principal.id, action: 'project.release.create', targetType: 'project', targetId: projectId, authorization: auth, meta: { repository: repository.name, tag: tagName, sha: head } })
+  await afterArtifactChange(env, { repositoryId: repository.id }, `refs/tags/${tagName}`, head)
   return (await env.DB.prepare(`SELECT ${releaseColumns} FROM project_releases WHERE id=?`).bind(id).first<ProjectRelease>())!
 }
 

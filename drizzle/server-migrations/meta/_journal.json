@@ -29,6 +29,13 @@
       "when": 1795686139462,
       "tag": "0003_scheduled_conversations",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795840922116,
+      "tag": "0004_factory_builds",
+      "breakpoints": true
     }
   ]
 }

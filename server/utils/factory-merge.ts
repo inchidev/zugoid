@@ -18,6 +18,7 @@ import { GITLAB_DRAFT_PREFIX, gitlabMergeRequest } from './gitlab-proposal'
 import { providerLabel, pullNoun } from './git-provider'
 import { publishTarget, repositoryGitFlow } from './project-git-flow'
 import { ARTIFACTS_NO_CHECKS_REASON, artifactsMerge, serverIdentity } from './factory-artifacts'
+import { afterArtifactChange } from './factory-builds'
 import { requireTask, taskPermissionAllowed } from './task-policy'
 import { fail } from './cf'
 
@@ -227,6 +228,9 @@ async function mergePull(env: ZugoidEnv, input: MergeInput) {
       env.DB.prepare("UPDATE tasks SET factory_state='merged' WHERE id=?").bind(box.taskId))
   } else if (outcome.status === 'failed') statements.push(env.DB.prepare("UPDATE tasks SET factory_state='merge_failed' WHERE id=?").bind(box.taskId))
   await env.DB.batch(statements)
+  if (environment.provider === 'artifacts' && outcome.status === 'completed' && typeof outcome.result.sha === 'string') {
+    await afterArtifactChange(env, { environmentId: environment.id }, `refs/heads/${environment.baseBranch}`, outcome.result.sha)
+  }
   return { id, status: outcome.status, result }
 }
 

@@ -4,7 +4,7 @@ import { newId, nowIso } from '../../shared/ids'
 import type { DatabaseValue } from '../../shared/database'
 import type { DatabaseItemDTO } from '../../shared/types'
 import type { ZugoidEnv } from '../../workers/env'
-import { canManageGadgets, canUseGadgets, requireGadget, type GadgetRow } from './gadget-catalog'
+import { canManageGadgets, canUseGadgets, getGadgetDetail, requireGadget, type GadgetRow } from './gadget-catalog'
 import { fail } from './cf'
 import { databaseFieldsFor, databaseItemDto, databaseSqlValue, loadDatabaseItem, requireDatabase, requireDatabaseItem } from './database-data'
 import { databaseItemMatchesView, loadDatabasePage } from './database-views'
@@ -47,7 +47,24 @@ function projectItem(item: DatabaseItemDTO, binding: GadgetBinding): DatabaseIte
 export async function openGadget(env: ZugoidEnv, actor: Membership, gadgetId: string): Promise<GadgetRuntimeDTO> {
   const { gadget, authorization } = await requireRuntimeAccess(env, actor, gadgetId)
   const published = await loadPublishedGadget(env, gadget, authorization)
-  const spec = published.spec
+  return renderGadget(env, { id: gadget.id, name: published.name, description: published.description, version: gadget.publishedVersion! }, published.spec, authorization)
+}
+
+/** Use the editor's own Data access for Preview. Only published Apps can invoke actions. */
+export async function previewGadget(env: ZugoidEnv, actor: Membership, gadgetId: string): Promise<GadgetRuntimeDTO> {
+  const draft = await getGadgetDetail(env, actor, gadgetId)
+  return renderGadget(env, { id: draft.id, name: draft.name, description: draft.description, version: draft.draftRevision }, draft.draftSpec, actor.authorization)
+}
+
+export async function previewGadgetBuild(env: ZugoidEnv, actor: Membership, gadgetId: string, input: { spec: GadgetSpec; name?: string; description?: string }) {
+  if (!canManageGadgets(actor)) fail(403, 'forbidden', 'Missing permission')
+  const app = await requireGadget(env, gadgetId, actor.authorization)
+  const spec = await validateGadgetSpec(env, input.spec, { publish: true, authorization: actor.authorization, spaceId: app.spaceId })
+  return renderGadget(env, { id: app.id, name: input.name ?? app.name, description: input.description ?? app.description,
+    version: app.draftRevision }, spec, actor.authorization)
+}
+
+async function renderGadget(env: ZugoidEnv, gadget: GadgetRuntimeDTO['gadget'], spec: GadgetSpec, authorization?: AuthorizationContext): Promise<GadgetRuntimeDTO> {
   const datasets = await Promise.all(spec.bindings.map(async (binding) => {
     const page = await loadDatabasePage(env, binding.source.databaseId, {
       viewId: binding.source.viewId,
@@ -65,11 +82,7 @@ export async function openGadget(env: ZugoidEnv, actor: Membership, gadgetId: st
       total: page.total,
     }
   }))
-  return {
-    gadget: { id: gadget.id, name: published.name, description: published.description, version: gadget.publishedVersion! },
-    spec,
-    datasets,
-  }
+  return { gadget, spec, datasets }
 }
 
 export type GadgetInvocation = {

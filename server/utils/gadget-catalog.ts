@@ -144,19 +144,25 @@ export async function updateGadget(
   return getGadgetDetail(env, actor, id)
 }
 
-export async function publishGadget(env: ZugoidEnv, actor: GadgetActor, id: string, revision: number): Promise<GadgetDetailDTO> {
+export async function publishGadget(env: ZugoidEnv, actor: GadgetActor, id: string, revision: number,
+  build?: { id: string; spec: GadgetSpec; name?: string; description?: string }): Promise<GadgetDetailDTO> {
   if (!canManageGadgets(actor)) fail(403, 'forbidden', 'Managing Apps also requires Manage data')
   const current = await requireGadget(env, id, actor.authorization)
   if (current.draftRevision !== revision) fail(409, 'stale_gadget', 'This App changed elsewhere. Reload and try again.')
-  const spec = await validateGadgetSpec(env, JSON.parse(current.draftSpecJson), { publish: true, authorization: actor.authorization, spaceId: current.spaceId })
+  const name = build?.name ?? current.name
+  const description = build?.description ?? current.description
+  if (build?.name && await env.DB.prepare('SELECT id FROM gadgets WHERE id <> ? AND space_id = ? AND lower(name) = lower(?) LIMIT 1').bind(id, current.spaceId, name).first()) {
+    fail(409, 'duplicate_name', 'An App with this name already exists')
+  }
+  const spec = await validateGadgetSpec(env, build?.spec ?? JSON.parse(current.draftSpecJson), { publish: true, authorization: actor.authorization, spaceId: current.spaceId })
   const version = (current.publishedVersion ?? 0) + 1
   const versionId = newId()
   const now = nowIso()
   const results = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO gadget_versions (id, gadget_id, version, name, description, spec_json, created_by, created_at)
-       SELECT ?, id, ?, name, description, ?, ?, ? FROM gadgets WHERE id = ? AND draft_revision = ?`,
-    ).bind(versionId, version, JSON.stringify(spec), actor.user.id, now, id, revision),
+       SELECT ?, id, ?, ?, ?, ?, ?, ? FROM gadgets WHERE id = ? AND draft_revision = ? AND published_version IS ?`,
+    ).bind(versionId, version, name, description, JSON.stringify(spec), actor.user.id, now, id, revision, current.publishedVersion),
     env.DB.prepare(
       `INSERT INTO grants (id, role_id, permissions, gadget_version_id, created_by, created_at)
        SELECT lower(hex(randomblob(16))), access.role_id, access.permissions, versions.id, ?, ?
@@ -164,8 +170,11 @@ export async function publishGadget(env: ZugoidEnv, actor: GadgetActor, id: stri
        JOIN grants access ON access.gadget_id = versions.gadget_id
        WHERE versions.id = ? AND versions.gadget_id = ?`,
     ).bind(actor.user.id, now, versionId, id),
-    env.DB.prepare('UPDATE gadgets SET published_version = ?, updated_at = ? WHERE id = ? AND draft_revision = ?')
-      .bind(version, now, id, revision),
+    env.DB.prepare(`UPDATE gadgets SET published_version=?, updated_at=?, name=?, description=?, draft_spec_json=?, draft_revision=draft_revision+?
+      WHERE id=? AND EXISTS (SELECT 1 FROM gadget_versions WHERE id=?)`)
+      .bind(version, now, name, description, build ? JSON.stringify(spec) : current.draftSpecJson, build ? 1 : 0, id, versionId),
+    ...(build ? [env.DB.prepare(`UPDATE project_builds SET published_version=? WHERE id=?
+      AND EXISTS (SELECT 1 FROM gadget_versions WHERE id=?)`).bind(version, build.id, versionId)] : []),
   ])
   if (!results[0]?.meta.changes) fail(409, 'stale_gadget', 'This App changed elsewhere. Reload and try again.')
   await writeAudit(env, { serverId: actor.serverId, actorId: actor.user.id, action: 'gadget.publish', targetType: 'gadget', targetId: id, meta: { version }, authorization: actor.authorization })
