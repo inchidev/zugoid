@@ -1,8 +1,16 @@
 # Software Factory: the Agent on its box
 
-A person assigns a repository-backed Task to a Pi Agent. The Task gets one **box** for its whole life: a container with an ordinary Git checkout, where Pi runs with its own read, write, edit and shell tools. Commands, tests, builds and commits run in the box at local speed and make no request to the Server. What leaves the box is gated: pushes, network windows, Project secrets and merges. Factory ends at the merge. Whatever builds from the target branch (Workers Builds, Coolify, Fly, Vercel or anything else) stays the repository's own business.
+A person assigns a repository-backed Task to a Pi Agent. The Task gets one **box** for its whole life: a container with an ordinary Git checkout, where Pi runs with its own read, write, edit and shell tools. Commands, tests, builds and commits run in the box at local speed and make no request to the Server. What leaves the box is gated: pushes, network windows, Project secrets and merges. Repositories can keep their own CI. Projects with an Artifacts repository can also use the Builds workflow below.
 
 A Server knows one kind of Node, the Compute Node, and two ways to get one: the operator's own VPS (the Docker Node below) and the operator's own Cloudflare account (Containers, below). All of them speak Node protocol 2. A Node of protocol 1, which ran one command at a time, is refused, and **Server settings → Compute** marks it **Needs this release’s Compute Node** with what to do. The Server's own VPS Node is replaced in place (below); any other Node is paired again.
+
+## Builds from Artifacts
+
+A Server operator binds its private `FILES` bucket, `FACTORY_CODE` Artifacts namespace, `FACTORY_LIZARD_KEY` secret and `FACTORY_LIZARD_PROJECT`. Set `FACTORY_PIPELINE_PROJECTS` to a JSON map keyed by Zugoid Project ID. An App entry has `{"kind":"app","app":"APP_ID"}` for an existing draft or published App in the Project's Space. An Unot entry has `{"kind":"unot","game":"farm"}` and uses the pilot studio's `FACTORY_UNOT_KEY` secret.
+
+Put `factory.sh` at the root of the Artifacts repository. The runner checks out the recorded SHA, runs the script in Lizard and expects `factory-build.json` in the same directory. For an App the output has a `spec` object and optional `name` and `description`; the App renderer reads Data using the editor's access in Preview. The Unot destination accepts a bundle containing `game.json`, a Rooms server and the built client files. The sandbox receives a short-lived, read-only source token during checkout. The Server uses the destination credential after the build, outside Lizard.
+
+Publishing a Task branch from Zugoid, merging it, or creating a tag from **Versions** queues a build. **Builds** shows the commit and check log and can rebuild a ref on demand. **Stage preview** sends the checked artifact to the destination. A Project Version tag is required for publication. In Zugoid the App publisher confirms the release. In Unot the studio owner opens the private Preview and publishes there.
 
 ## Set up on a VPS
 

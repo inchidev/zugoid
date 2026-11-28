@@ -8,6 +8,7 @@ import { presenceBySpace, serverPresence } from './server-presence'
 import { authorizedSockets } from './socket-access'
 import { RealtimeKitRestProvisioner } from './realtimekit-rest'
 import { advanceSelfUpdate } from '../server/utils/server-self-update'
+import { advanceFactoryBuilds } from '../server/utils/factory-builds'
 
 const PRESENCE_TICK_MS = 60_000
 
@@ -114,9 +115,29 @@ export class ServerDurableObject extends DurableObject<ZugoidEnv> {
   }
 
   override async alarm(): Promise<void> {
+    const project = this.factoryBuildProject()
+    if (project) {
+      if (await advanceFactoryBuilds(this.env, project)) await this.scheduleFactoryBuilds(Date.now() + 7_000)
+      return
+    }
     if (this.updateRunner()) { await this.stepUpdate(); return }
     await this.broadcast()
     await this.scheduleTick()
+  }
+
+  private factoryBuildProject() {
+    const name = this.ctx.id.name ?? ''
+    return name.startsWith('factory-builds:') ? name.slice('factory-builds:'.length) : ''
+  }
+
+  async runFactoryBuilds(): Promise<void> {
+    if (!this.factoryBuildProject()) throw new Error('Not a Factory build runner')
+    await this.scheduleFactoryBuilds(Date.now() + 1)
+  }
+
+  private async scheduleFactoryBuilds(at: number) {
+    const next = await this.ctx.storage.getAlarm()
+    if (next === null || next > at) await this.ctx.storage.setAlarm(at)
   }
 
   /** A separate named instance runs this Server's own updates; it never holds sockets. */

@@ -4,6 +4,7 @@ import baselineSql from '../../drizzle/server-migrations/0000_baseline.sql?raw'
 import customersTelegramSql from '../../drizzle/server-migrations/0001_customers_telegram.sql?raw'
 import mediaSql from '../../drizzle/server-migrations/0002_media.sql?raw'
 import scheduledConversationsSql from '../../drizzle/server-migrations/0003_scheduled_conversations.sql?raw'
+import factoryBuildsSql from '../../drizzle/server-migrations/0004_factory_builds.sql?raw'
 import { schema } from '../../drizzle/schema'
 import { isUuidV4 } from '../../shared/server-settings'
 import { isOperatorManaged } from '../../shared/server-runtime'
@@ -32,6 +33,7 @@ export const INIT_SQL = d1ExecSql([
   customersTelegramSql,
   mediaSql,
   scheduledConversationsSql,
+  factoryBuildsSql,
 ].join('\n--> statement-breakpoint\n'))
 
 /** Bootstrap is only for an empty database. Deployed changes use D1 migrations. */

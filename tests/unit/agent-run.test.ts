@@ -482,16 +482,13 @@ describe('Pi run authorization', () => {
     }
   })
 
-  it('offers Data tools to a permitted Agent and hides paused App draft tools', async () => {
+  it('offers Data and App draft reads to a permitted Agent in review mode', async () => {
     db.exec(`UPDATE roles SET permissions_bitmask=${ALL_PERMISSIONS} WHERE id='agent-role'`)
     const run = await createAgentRun(env, (await start())!, input())
     const tools = agentTools(env, await runAuthorization(env, run), () => {}, run)
     const names = (await tools.catalog()).map(tool => tool.name)
-    expect(names).toEqual(expect.arrayContaining(['list_tasks', 'list_tables', 'list_data', 'read_records', 'get_item']))
-    for (const name of ['list_app_drafts', 'create_app_draft']) {
-      expect(names).not.toContain(name)
-      await expect(tools.call(name, {})).rejects.toMatchObject({ statusCode: 403 })
-    }
+    expect(names).toEqual(expect.arrayContaining(['list_tasks', 'list_tables', 'list_data', 'read_records', 'get_item', 'list_app_drafts', 'get_app_draft']))
+    expect(names).not.toContain('create_app_draft')
   })
 
   it('authorizes a gateway tool call once', async () => {

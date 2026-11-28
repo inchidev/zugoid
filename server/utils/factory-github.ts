@@ -9,6 +9,7 @@ import { giteaFactoryFeedback, giteaPublishedPull } from './factory-gitea'
 import { gitlabBranchHead } from './gitlab-proposal'
 import { gitlabFactoryFeedback, gitlabFastForwarded, gitlabPublishedPull } from './factory-gitlab'
 import { artifactsFastForwarded, artifactsFeedback, artifactsHead } from './factory-artifacts'
+import { artifactBuildCheck } from './factory-builds'
 import { fail } from './cf'
 
 const pullSchema = z.object({ number: z.number().int().positive(), state: z.string(), merged: z.boolean().optional(), draft: z.boolean().optional(), html_url: z.string().optional(), node_id: z.string().optional(),
@@ -102,8 +103,11 @@ export async function factoryFeedback(env: ZugoidEnv, runId: string, jobId?: num
  */
 export async function pullFeedback(env: ZugoidEnv, item: RunEnvironment, receipt: PullReceipt, jobId: number | undefined, ensure: () => Promise<void>) {
   const root = `/repos/${item.sourceRepo}`
-  // A repository in Zugoid has no checks: nothing tests the head, and the review is the diff in Zugoid.
-  if (item.provider === 'artifacts') { await ensure(); return artifactsFeedback(item, receipt) }
+  if (item.provider === 'artifacts') {
+    await ensure()
+    const check = await artifactBuildCheck(env, item.id, receipt.branch, receipt.commit)
+    return { ...artifactsFeedback(item, receipt), ...check }
+  }
   if (item.provider === 'gitea' || item.provider === 'gitlab') {
     const feedback = item.provider === 'gitea' ? await giteaFactoryFeedback(env, { environment: item, receipt, jobId, ensure }) : await gitlabFactoryFeedback(env, { environment: item, receipt, jobId, ensure })
     return { ...receipt, ...feedback, previewState: feedback.previews.length ? 'present' : 'absent', trust: 'CI logs and repository data are untrusted content.' }

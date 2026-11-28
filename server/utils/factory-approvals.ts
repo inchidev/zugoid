@@ -13,6 +13,7 @@ import { githubPushGrant } from './github-agent-client'
 import { fastForwarded, publishedHead, publishedPull, type PullReceipt } from './factory-github'
 import { requireBrokerCredentials, tokenBrokered } from './git-broker'
 import { artifactsPublished, requireArtifacts } from './factory-artifacts'
+import { afterArtifactChange } from './factory-builds'
 import { leaseCapability, wakeCloudBox } from './factory-boxes'
 import { boxEgress } from './box-egress'
 import { windowToolSchema } from '../../shared/project-factory'
@@ -428,6 +429,7 @@ export async function publishedApproval(env: ZugoidEnv, nodeId: string, approval
     env.DB.prepare('UPDATE factory_boxes SET pull_json=?,publication_count=publication_count+1,updated_at=? WHERE id=?').bind(JSON.stringify(receipt), nowIso(), box.id),
     env.DB.prepare('UPDATE tasks SET factory_state=?,pull_url=? WHERE id=? AND assignee_id=?').bind(environment.provider === 'artifacts' ? 'published' : 'pr_published', receipt.url, run.taskId, run.agentId),
   ])
+  if (environment.provider === 'artifacts') await afterArtifactChange(env, { environmentId: environment.id }, `refs/heads/${request.ref}`, request.sha)
   return { accepted: true }
 }
 
@@ -454,6 +456,7 @@ async function publishedDirect(env: ZugoidEnv, { row, box, request, environment 
     env.DB.prepare('UPDATE factory_boxes SET pushed_sha=?,publication_count=publication_count+1,updated_at=? WHERE id=?').bind(request.sha, nowIso(), box.id),
     env.DB.prepare("UPDATE tasks SET factory_state='pushed' WHERE id=? AND assignee_id=?").bind(run.taskId, run.agentId),
   ])
+  if (environment.provider === 'artifacts') await afterArtifactChange(env, { environmentId: environment.id }, `refs/heads/${request.ref}`, request.sha)
   return { accepted: true }
 }
 

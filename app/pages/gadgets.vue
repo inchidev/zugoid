@@ -33,7 +33,11 @@ const gadgets = computed(() => gadgetsQ.data.value?.gadgets ?? [])
 const canManage = computed(() => Boolean(gadgetsQ.data.value?.canManage))
 const selectedId = computed(() => String(route.query.gadget || '') || gadgets.value[0]?.id || '')
 const activeSummary = computed(() => gadgets.value.find(gadget => gadget.id === selectedId.value) ?? null)
-const editing = computed(() => canManage.value && (route.query.edit === '1' || Boolean(activeSummary.value && !activeSummary.value.publishedVersion)))
+const preview = computed(() => canManage.value && route.query.preview === '1')
+const factoryPreview = computed(() => preview.value && typeof route.query.factory === 'string' && typeof route.query.build === 'string'
+  ? `/api/projects/${encodeURIComponent(route.query.factory)}/builds/${encodeURIComponent(route.query.build)}/preview` : '')
+const editing = computed(() => canManage.value && !preview.value
+  && (route.query.edit === '1' || Boolean(activeSummary.value && !activeSummary.value.publishedVersion)))
 
 watch([gadgets, selectedId], ([list, id]) => {
   if (!list.length || list.some(gadget => gadget.id === id)) return
@@ -46,9 +50,10 @@ const detailQ = useQuery({
   enabled: computed(() => Boolean(selectedId.value && editing.value)),
 })
 const runtimeQ = useQuery({
-  queryKey: computed(() => ['gadget-runtime', selectedId.value, activeSummary.value?.publishedVersion]),
-  queryFn: () => api<GadgetRuntimeDTO>(`/api/gadgets/${selectedId.value}/runtime`),
-  enabled: computed(() => Boolean(selectedId.value && activeSummary.value?.publishedVersion && !editing.value)),
+  queryKey: computed(() => ['gadget-runtime', selectedId.value, activeSummary.value?.publishedVersion, activeSummary.value?.draftRevision, preview.value, factoryPreview.value]),
+  queryFn: () => api<GadgetRuntimeDTO>(factoryPreview.value || `/api/gadgets/${selectedId.value}/runtime`,
+    { query: preview.value && !factoryPreview.value ? { preview: '1' } : undefined }),
+  enabled: computed(() => Boolean(selectedId.value && (preview.value || activeSummary.value?.publishedVersion) && !editing.value)),
   refetchInterval: 10_000,
 })
 const resourcesQ = useQuery({
@@ -241,6 +246,11 @@ async function saveDraft(): Promise<GadgetDetailDTO | null> {
   }
 }
 
+async function openPreview() {
+  const draft = await saveDraft()
+  if (draft) await navigateTo(gadgetPath(draft.id) + '&preview=1')
+}
+
 const publishing = ref(false)
 async function publish() {
   publishing.value = true
@@ -361,12 +371,13 @@ function roleAccessLabel(role: RoleDTO) {
           color="neutral"
           variant="ghost"
           icon="i-ph-pencil-simple"
-          label="Edit"
+          :label="preview ? 'Back to editor' : 'Edit'"
           @click="navigateTo(gadgetPath(activeSummary.id, true))"
         />
         <template v-if="editing && activeSummary">
           <UButton v-if="activeSummary.publishedVersion" color="neutral" variant="ghost" label="Close" @click="navigateTo(gadgetPath(activeSummary.id))" />
           <UButton color="neutral" variant="outline" label="Save draft" :loading="saving && !publishing" @click="saveDraft" />
+          <UButton color="neutral" variant="soft" label="Preview" :disabled="saving || publishing || !draftSpec.sections.length" @click="openPreview" />
           <UButton label="Publish" icon="i-ph-paper-plane-tilt" :loading="publishing" :disabled="!draftSpec.sections.length" @click="publish" />
         </template>
       </template>
@@ -477,7 +488,7 @@ function roleAccessLabel(role: RoleDTO) {
                   <p class="truncate text-xs text-muted">{{ datasetFor(section.bindingId)?.database.name }} / {{ datasetFor(section.bindingId)?.view.name }}</p>
                 </div>
                 <UButton
-                  v-if="datasetFor(section.bindingId)?.binding.operations.includes('create')"
+                  v-if="!preview && datasetFor(section.bindingId)?.binding.operations.includes('create')"
                   size="sm"
                   icon="i-ph-plus"
                   label="Record"
@@ -497,7 +508,7 @@ function roleAccessLabel(role: RoleDTO) {
                     <p class="truncate text-xs text-muted">{{ datasetFor(section.bindingId)!.fields.map(field => displayValue(item.values[field.id])).join(' · ') }}</p>
                   </div>
                   <UButton
-                    v-if="datasetFor(section.bindingId)!.binding.operations.includes('update')"
+                    v-if="!preview && datasetFor(section.bindingId)!.binding.operations.includes('update')"
                     color="neutral"
                     variant="ghost"
                     icon="i-ph-pencil-simple"
@@ -515,7 +526,7 @@ function roleAccessLabel(role: RoleDTO) {
                       <td v-for="field in datasetFor(section.bindingId)!.fields" :key="field.id" class="px-3 py-2 text-muted">{{ displayValue(item.values[field.id]) }}</td>
                       <td class="px-1 py-1">
                         <UButton
-                          v-if="datasetFor(section.bindingId)!.binding.operations.includes('update')"
+                          v-if="!preview && datasetFor(section.bindingId)!.binding.operations.includes('update')"
                           color="neutral"
                           variant="ghost"
                           icon="i-ph-pencil-simple"

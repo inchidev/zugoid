@@ -14,6 +14,10 @@ export type ZugoidEnv = {
   FACTORY_CODE?: Artifacts
   FACTORY_IMAGE?: string
   FACTORY_POLICY?: string
+  FACTORY_LIZARD_KEY?: string
+  FACTORY_LIZARD_PROJECT?: string
+  FACTORY_PIPELINE_PROJECTS?: string
+  FACTORY_UNOT_KEY?: string
   /** Dedicated repository integration, separate from GitHub sign-in. Never exposed to compute. */
   GITHUB_AGENT_APP_ID?: string
   GITHUB_AGENT_APP_PRIVATE_KEY?: string

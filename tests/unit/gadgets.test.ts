@@ -6,14 +6,14 @@ import { INIT_SQL } from '../../server/utils/db'
 import { createGadget, getGadgetDetail, listGadgets, publishGadget, updateGadget } from '../../server/utils/gadget-catalog'
 import { composeGadgetSpec } from '../../server/utils/gadget-composer'
 import { inferAiFunction } from '../../server/utils/ai-functions'
-import { invokeGadget, openGadget } from '../../server/utils/gadget-runtime'
+import { invokeGadget, openGadget, previewGadget, previewGadgetBuild } from '../../server/utils/gadget-runtime'
 import { parseGadgetSpec, validateGadgetSpec } from '../../server/utils/gadget-spec'
 import { agentTools } from '../../server/utils/agent-tools'
 import type { Membership } from '../../server/utils/guards'
+import { advanceFactoryBuilds, afterArtifactChange, createBuild, listBuilds, previewAppBuild, publishAppBuild, stageBuild } from '../../server/utils/factory-builds'
+import type { ZugoidEnv } from '../../workers/env'
 
 vi.mock('../../server/utils/ai-functions', () => ({ inferAiFunction: vi.fn() }))
-// App draft tools are paused with the Apps area; these tests cover them for when it returns.
-vi.mock('../../shared/features', async importOriginal => ({ ...await importOriginal<typeof import('../../shared/features')>(), toolPaused: () => false }))
 
 beforeAll(() => vi.stubGlobal('createError', (input: { statusCode: number; statusMessage: string; data: unknown }) => Object.assign(new Error(input.statusMessage), input)))
 afterAll(() => vi.unstubAllGlobals())
@@ -250,6 +250,82 @@ describe('Gadgets', () => {
       version: 2,
     })
     sqlite.close()
+  })
+
+  it('opens a saved or built App draft with Data and leaves the published version unchanged', async () => {
+    const sqlite = fixture()
+    const env = { DB: d1(sqlite) } as never
+    const manager = actor()
+    const created = await createGadget(env, manager, { name: 'Live desk', spec, roleIds: ['member-role'] })
+    const v1 = await publishGadget(env, manager, created.id, created.draftRevision)
+    await updateGadget(env, manager, created.id, { revision: v1.draftRevision, name: 'Editor preview' })
+    const draft = await previewGadget(env, manager, created.id)
+    expect(draft.gadget.name).toBe('Editor preview')
+    expect(draft.datasets[0]?.items[0]?.values).toEqual({ 'lead-status': 'Open' })
+    const build = await previewGadgetBuild(env, manager, created.id, { spec, name: 'Factory preview' })
+    expect(build.gadget.name).toBe('Factory preview')
+    const member = actor({ roleId: 'member-role', roleName: 'Member', perms: Permission.useGadgets, isOwner: false })
+    await expect(previewGadget(env, member, created.id)).rejects.toMatchObject({ statusCode: 403 })
+    expect((await openGadget(env, member, created.id)).gadget).toMatchObject({ name: 'Live desk', version: 1 })
+    sqlite.close()
+  })
+
+  it('builds an App from a Project Version and publishes that exact checked artifact once', async () => {
+    const sqlite = fixture()
+    const manager = actor()
+    const values = new Map<string, string>()
+    const alarm = vi.fn(async () => {})
+    const commit = 'a'.repeat(40)
+    const revoke = vi.fn(async () => {})
+    const env = {
+      DB: d1(sqlite),
+      FILES: { put: (key: string, value: string) => values.set(key, value),
+        get: (key: string) => values.has(key) ? { json: () => JSON.parse(values.get(key)!) } : null },
+      FACTORY_LIZARD_KEY: 'fixture-runner-key', FACTORY_LIZARD_PROJECT: 'fixture-project',
+      SERVER_DO: { getByName: () => ({ runFactoryBuilds: alarm }) },
+      FACTORY_CODE: { get: async () => ({
+        log: async () => [{ hash: commit }], info: async () => ({ remote: 'https://git.fixture.test/source' }),
+        createToken: async () => ({ id: 'read', plaintext: 'fixture-artifacts-token' }),
+        revokeToken: revoke, [Symbol.dispose]: () => {},
+      }) },
+    } as unknown as ZugoidEnv
+    const artifact = { spec, name: 'Checked App' }
+    const network = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/api/sandboxes')) return Response.json({ sandboxId: 'build-fixture' })
+      if (url.pathname.endsWith('/exec')) return Response.json({ exitCode: 0, stdout: 'checks passed' })
+      if (url.pathname.endsWith('/files')) return new Response(url.searchParams.get('path') === '/tmp/factory-exit' ? '0' : JSON.stringify(artifact))
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 })
+      throw new Error('Unexpected build request')
+    })
+    try {
+      sqlite.exec(`INSERT INTO projects(id,name,created_by,created_at,updated_at) VALUES('proj','Apps','owner',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+        INSERT INTO project_repositories(id,project_id,provider,host,external_id,slug,default_branch,created_by,created_at)
+        VALUES('repo','proj','artifacts','https://git.fixture.test','artifact-id','desk','main','owner',CURRENT_TIMESTAMP);
+        INSERT INTO project_releases(id,project_id,repository_id,repository,tag,version,sha,created_by,created_at)
+        VALUES('release','proj','repo','desk','v1.0.0','1.0.0','${commit}','owner',CURRENT_TIMESTAMP);`)
+      const app = await createGadget(env, manager, { name: 'Desk', spec, roleIds: ['member-role'] })
+      env.FACTORY_PIPELINE_PROJECTS = JSON.stringify({ proj: { kind: 'app', app: app.id } })
+      await afterArtifactChange(env, { repositoryId: 'repo' }, 'refs/tags/v1.0.0', commit)
+      expect(alarm).toHaveBeenCalledTimes(1)
+      const { builds: [queued] } = await listBuilds(env, manager, 'proj')
+      expect(queued).toMatchObject({ sha: commit, state: 'queued' })
+      const duplicate = await createBuild(env, manager, 'proj', { repoId: 'repo', ref: 'refs/tags/v1.0.0' })
+      expect(duplicate.id).toBe(queued!.id)
+      await advanceFactoryBuilds(env, 'proj')
+      expect(revoke).toHaveBeenCalledWith('read')
+      await advanceFactoryBuilds(env, 'proj')
+      await stageBuild(env, manager, 'proj', queued!.id)
+      expect((await previewAppBuild(env, manager, 'proj', queued!.id)).gadget.name).toBe(artifact.name)
+      expect((await getGadgetDetail(env, manager, app.id)).publishedVersion).toBeNull()
+      expect((await publishAppBuild(env, manager, 'proj', queued!.id)).publishedVersion).toBe(1)
+      expect((await publishAppBuild(env, manager, 'proj', queued!.id)).publishedVersion).toBe(1)
+      expect((await openGadget(env, manager, app.id)).gadget.name).toBe(artifact.name)
+      expect(network.mock.calls.at(-1)?.[1]?.method).toBe('DELETE')
+    } finally {
+      network.mockRestore()
+      sqlite.close()
+    }
   })
 
   it('cannot update a Record outside a bound filtered View', async () => {
