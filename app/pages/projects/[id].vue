@@ -100,7 +100,7 @@ async function remove(id: string) {
     <ProjectsAccess v-if="hasOwnAccess" :key="selected" :project-id="selected" />
     <ProjectsBuilds
       :key="'builds-' + selected" :project-id="selected" :repositories="detail.data.value.repositories"
-      :can-manage="hasPermission(detail.data.value.permissions, Permission.manageProjects) && !detail.data.value.project.archivedAt"
+      :can-manage="can(Permission.manageProjects) && !detail.data.value.project.archivedAt"
     />
     <section v-if="hasOwnAccess" class="space-y-4" aria-label="Repositories">
     <div class="flex flex-wrap items-center justify-between gap-3"><h2 class="font-medium">Repositories</h2><div v-if="can(Permission.manageProjects) && !detail.data.value.project.archivedAt" class="flex flex-wrap gap-2"><UButton label="Add reference only" color="neutral" variant="ghost" @click="repositoryOpen = true" /><UButton v-if="can(Permission.manageServer)" label="Connect repository" icon="i-ph-git-branch" @click="connectOpen = true" /></div></div>
