@@ -106,14 +106,14 @@ async function body(response: Response, limit: number) {
  * The refs a repository advertises for a service, read with a repository token: exactly what a push's `old`
  * values must name. An empty repository advertises none.
  */
-export async function advertisedRefs(remote: string, token: string, service: 'git-upload-pack' | 'git-receive-pack', transport: typeof fetch = fetch) {
+export async function advertisedRefs(remote: string, token: string, service: 'git-upload-pack' | 'git-receive-pack', transport: typeof fetch = fetch, includePeeled = false) {
   const response = await transport(`${remote}/info/refs?service=${service}`, { headers: gitHeaders(token), redirect: 'manual', signal: AbortSignal.timeout(30000) })
   if (!response.ok) { await response.body?.cancel(); throw new Error(`The repository did not advertise its refs (HTTP ${response.status})`) }
   const refs = new Map<string, string>()
   for (const line of parsePktLines(await body(response, 4_000_000))) {
     if (line.startsWith('#')) continue
     const [sha, name] = line.split('\0')[0]!.split(' ')
-    if (sha && name && SHA.test(sha) && name !== 'capabilities^{}' && !name.endsWith('^{}')) refs.set(name, sha)
+    if (sha && name && SHA.test(sha) && name !== 'capabilities^{}' && (includePeeled || !name.endsWith('^{}'))) refs.set(name, sha)
   }
   return refs
 }
