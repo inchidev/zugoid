@@ -247,7 +247,7 @@
     "@nuxt/eslint": "^1.17.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/html-to-text": "9.0.4",
-    "@types/node": "^24.19.0",
+    "@types/node": "^26.6.6",
     "@types/sanitize-html": "^2.16.2",
     "@types/turndown": "5.0.6",
     "@vitejs/plugin-vue": "6.0.8",
